@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <h2>Dashboard</h2>
+    <p>Welcome to your dashboard, {{ current_user.username }}!</p>
+    <p>This page is only accessible to logged-in users.</p>
+    <p>Your email: {{ current_user.email }}</p>
+{% endblock %}

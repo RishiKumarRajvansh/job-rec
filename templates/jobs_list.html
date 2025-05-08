@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Jobs - Job Recommender{% endblock %}
+{% block content %}
+<div class="container mt-4">
+    <div class="row mb-4">
+        <div class="col-md-8">
+            <h1>Job Listings</h1>
+            <p class="text-muted">
+                {% if query != "All" or location != "All" %}
+                    Showing results for "{{ query }}" in "{{ location }}"
+                {% else %}
+                    Showing all available jobs
+                {% endif %}
+                
+                {% if resume_skills %}
+                    <span class="badge bg-info text-dark ms-2">
+                        <i class="bi bi-check-circle me-1"></i>Matched with your resume skills
+                    </span>
+                {% endif %}
+            </p>
+        </div>
+        <div class="col-md-4 text-end">
+            <a href="{{ url_for('index') }}" class="btn btn-outline-primary">
+                <i class="bi bi-search me-1"></i>New Search
+            </a>
+        </div>
+    </div>
+
+    {% if resume_skills %}
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">Your Resume Skills</h5>
+                    <a href="{{ url_for('reset_skills') }}" class="btn btn-sm btn-outline-secondary">
+                        <i class="bi bi-x-circle me-1"></i>Clear
+                    </a>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex flex-wrap gap-2">
+                        {% for skill in resume_skills %}
+                        <span class="badge bg-primary">{{ skill }}</span>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="row">
+        {% if jobs %}
+            {% for job in jobs %}
+            <div class="col-md-6 mb-4">
+                <div class="card h-100 {% if resume_skills and job.matching_resume_skills > 0 %}border-success{% endif %}">
+                    {% if resume_skills and job.matching_resume_skills > 0 %}
+                    <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                        <span>
+                            <i class="bi bi-check-circle me-1"></i>
+                            {{ job.matching_resume_skills }} matching skills
+                        </span>
+                        <span class="badge bg-light text-dark">{{ (job.matching_resume_skills / resume_skills|length * 100)|round }}% match</span>
+                    </div>
+                    {% endif %}
+                    <div class="card-body">
+                        <h5 class="card-title">{{ job.title }}</h5>
+                        <h6 class="card-subtitle mb-2 text-muted">{{ job.company }}</h6>
+                        <p class="card-text">
+                            <i class="bi bi-geo-alt me-1"></i>{{ job.location }}<br>
+                            {% if job.salary %}
+                            <i class="bi bi-cash me-1"></i>{{ job.salary }}<br>
+                            {% endif %}
+                            {% if job.job_type %}
+                            <i class="bi bi-briefcase me-1"></i>{{ job.job_type }}
+                            {% endif %}
+                        </p>
+                        <p class="card-text">{{ job.snippet }}</p>
+                        
+                        {% if job.skills %}
+                        <div class="mb-3">
+                            <strong>Skills:</strong>
+                            <div class="d-flex flex-wrap gap-1 mt-1">
+                                {% for skill in job.skills %}
+                                <span class="badge {% if resume_skills and skill in resume_skills %}bg-success{% else %}bg-secondary{% endif %}">
+                                    {{ skill }}
+                                </span>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+                        
+                        <div class="d-flex justify-content-between align-items-center mt-3">
+                            <small class="text-muted">
+                                <i class="bi bi-calendar me-1"></i>{{ job.date_posted }}
+                            </small>
+                            <a href="{{ job.url }}" target="_blank" class="btn btn-primary">
+                                <i class="bi bi-box-arrow-up-right me-1"></i>Apply
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="col-12">
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle me-2"></i>
+                    No jobs found matching your criteria. Try broadening your search.
+                </div>
+            </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
