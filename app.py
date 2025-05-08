@@ -5,13 +5,13 @@ from flask_login import LoginManager, UserMixin, login_user, current_user, logou
 from datetime import datetime
 import os
 import json
+from werkzeug.utils import secure_filename
 
 # Initialize Flask app
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key_here'  # Change this to a random secret key
 basedir = os.path.abspath(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'instance', 'job_recommender.db')
-
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Set up upload folder for resumes
@@ -31,7 +31,10 @@ login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 login_manager.login_message_category = 'info'
 
-# User model - must be defined before importing other modules that use it
+# Import forms
+from forms import RegistrationForm, LoginForm, ProfileForm, JobSearchForm
+
+# User model
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(20), unique=True, nullable=False)
@@ -40,7 +43,6 @@ class User(db.Model, UserMixin):
     skills = db.Column(db.Text, nullable=True)
     experience_summary = db.Column(db.Text, nullable=True)
     education_summary = db.Column(db.Text, nullable=True)
-
     def __repr__(self):
         return f"User('{self.username}', '{self.email}')"
 
@@ -48,48 +50,8 @@ class User(db.Model, UserMixin):
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# Import forms
-from forms import RegistrationForm, LoginForm, ProfileForm, JobSearchForm
-
-# Simple mock data for jobs
-MOCK_JOBS = [
-    {
-        "id": 1,
-        "title": "Python Developer",
-        "company": "Tech Solutions Inc.",
-        "location": "Remote",
-        "salary": "$80,000 - $100,000",
-        "job_type": "Full-time",
-        "snippet": "We are looking for a Python developer with experience in web frameworks like Flask or Django.",
-        "skills": ["Python", "Flask", "Django", "SQL", "Git"],
-        "date_posted": "2023-08-15",
-        "url": "https://example.com/jobs/1"
-    },
-    {
-        "id": 2,
-        "title": "Frontend Developer",
-        "company": "Web Creations",
-        "location": "New York, NY",
-        "salary": "$70,000 - $90,000",
-        "job_type": "Full-time",
-        "snippet": "Join our team to build responsive and interactive web applications using modern JavaScript frameworks.",
-        "skills": ["JavaScript", "React", "HTML", "CSS", "Git"],
-        "date_posted": "2023-08-14",
-        "url": "https://example.com/jobs/2"
-    },
-    {
-        "id": 3,
-        "title": "Data Scientist",
-        "company": "Data Insights",
-        "location": "San Francisco, CA",
-        "salary": "$100,000 - $130,000",
-        "job_type": "Full-time",
-        "snippet": "Looking for a data scientist to analyze large datasets and build predictive models.",
-        "skills": ["Python", "R", "SQL", "Machine Learning", "Statistics"],
-        "date_posted": "2023-08-13",
-        "url": "https://example.com/jobs/3"
-    }
-]
+# Import database functions
+from database_manager import get_all_jobs, search_jobs_db, get_job_by_id
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -157,47 +119,23 @@ def profile():
     return render_template('profile.html', title='Profile', form=form, current_year=datetime.now().year)
 
 @app.route('/jobs')
+@login_required
 def list_all_jobs():
-    jobs = MOCK_JOBS  # Use mock data for now
-    resume_skills = session.get('resume_skills', [])
-    
-    # If resume skills are active, add matching info to jobs
-    if resume_skills:
-        for job in jobs:
-            job_skills = [s.lower() for s in job.get('skills', [])]
-            resume_skills_lower = [s.lower() for s in resume_skills]
-            
-            # Count matching skills
-            matching_skills = sum(1 for s in resume_skills_lower if s in job_skills)
-            job['matching_resume_skills'] = matching_skills
-        
-        # Sort by number of matching skills (descending)
-        jobs.sort(key=lambda x: x.get('matching_resume_skills', 0), reverse=True)
-    
-    return render_template('jobs_list.html', jobs=jobs, query="All", location="All", 
-                          resume_skills=resume_skills, current_year=datetime.now().year)
-
-@app.route('/search', methods=['POST'])
-def search():
-    form = JobSearchForm()
-    if form.validate_on_submit():
-        query = form.query.data.lower()
-        location = form.location.data.lower()
+    try:
+        # Get jobs from database
+        jobs = get_all_jobs()
         resume_skills = session.get('resume_skills', [])
         
-        # Filter jobs based on query and location
-        filtered_jobs = []
-        for job in MOCK_JOBS:
-            if (query in job['title'].lower() or query in job['company'].lower() or 
-                query in job['snippet'].lower() or 
-                any(query in skill.lower() for skill in job['skills'])):
-                
-                if location == 'all' or location in job['location'].lower():
-                    filtered_jobs.append(job.copy())
-        
         # If resume skills are active, add matching info to jobs
-        if resume_skills:
-            for job in filtered_jobs:
+        if resume_skills and jobs:
+            for job in jobs:
+                # Ensure skills is a list
+                if isinstance(job.get('skills'), str):
+                    try:
+                        job['skills'] = json.loads(job['skills'])
+                    except json.JSONDecodeError:
+                        job['skills'] = job['skills'].split(',') if job['skills'] else []
+                
                 job_skills = [s.lower() for s in job.get('skills', [])]
                 resume_skills_lower = [s.lower() for s in resume_skills]
                 
@@ -206,16 +144,40 @@ def search():
                 job['matching_resume_skills'] = matching_skills
             
             # Sort by number of matching skills (descending)
-            filtered_jobs.sort(key=lambda x: x.get('matching_resume_skills', 0), reverse=True)
+            jobs.sort(key=lambda x: x.get('matching_resume_skills', 0), reverse=True)
         
-        return render_template('jobs_list.html', jobs=filtered_jobs, query=form.query.data, 
-                              location=form.location.data, resume_skills=resume_skills, 
-                              current_year=datetime.now().year)
-    
-    return redirect(url_for('index'))
+        return render_template('jobs_list.html', jobs=jobs, query="All", location="All",
+                            resume_skills=resume_skills, current_year=datetime.now().year)
+    except Exception as e:
+        flash(f"Error loading jobs: {str(e)}", 'danger')
+        return render_template('jobs_list.html', jobs=[], query="All", location="All",
+                            resume_skills=resume_skills, current_year=datetime.now().year)
+
+@app.route('/search', methods=['POST'])
+@login_required
+def search():
+    try:
+        form = JobSearchForm()
+        if form.validate_on_submit():
+            query = form.query.data.lower()
+            location = form.location.data.lower()
+            resume_skills = session.get('resume_skills', [])
+            
+            # Use database search function
+            filtered_jobs = search_jobs_db(query, location, resume_skills)
+            
+            return render_template('jobs_list.html', jobs=filtered_jobs, query=form.query.data,
+                                location=form.location.data, resume_skills=resume_skills,
+                                current_year=datetime.now().year)
+        return redirect(url_for('index'))
+    except Exception as e:
+        flash(f"Error searching jobs: {str(e)}", 'danger')
+        return render_template('jobs_list.html', jobs=[], query=form.query.data if form.validate_on_submit() else "All", 
+                            location=form.location.data if form.validate_on_submit() else "All",
+                            resume_skills=session.get('resume_skills', []), current_year=datetime.now().year)
 
 @app.route('/upload_resume', methods=['GET', 'POST'])
-@login_required  # Add this decorator to require login
+@login_required
 def upload_resume():
     if request.method == 'POST':
         if 'resume' not in request.files:
@@ -234,18 +196,15 @@ def upload_resume():
         else:
             flash('File type not allowed. Please upload TXT, PDF, or DOCX.', 'warning')
             return redirect(request.url)
-    
     return render_template('upload_resume.html', current_year=datetime.now().year)
 
 @app.route('/reset_skills')
+@login_required
 def reset_skills():
     if 'resume_skills' in session:
         session.pop('resume_skills')
         flash('Resume skills have been cleared.', 'info')
     return redirect(url_for('index'))
-
-# Add secure_filename import
-from werkzeug.utils import secure_filename
 
 if __name__ == '__main__':
     with app.app_context():

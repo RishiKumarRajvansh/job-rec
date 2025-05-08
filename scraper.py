@@ -10,46 +10,6 @@ import os # For checking if model path exists, though spacy.load handles it
 # Import database functions
 from database_manager import init_db, save_job_to_db
 
-# --- spaCy Model Loading ---
-NLP = None # Global NLP model
-
-# def load_spacy_model():
-#     """Loads the spaCy model, downloading if necessary."""
-#     global NLP
-#     if NLP is None:
-#         model_name = "en_core_web_sm"
-#         try:
-#             # Check if model is already available (spaCy does this, but an explicit check can be clearer)
-#             # This step is more for understanding; spacy.load() itself handles the check.
-#             # if not spacy.util.is_package(model_name):
-#             #    raise OSError("Model not found by spacy.util.is_package")
-#             NLP = spacy.load(model_name)
-#             print(f"Successfully loaded spaCy model '{model_name}'.")
-#         except OSError:
-#             print(f"spaCy model '{model_name}' not found or not loadable. Attempting to download...")
-#             try:
-#                 spacy.cli.download(model_name)
-#                 NLP = spacy.load(model_name) # Try loading again after download
-#                 print(f"Successfully downloaded and loaded spaCy model '{model_name}'.")
-#             except SystemExit as e: # spacy.cli.download can cause SystemExit
-#                 print(f"spaCy download command exited. This might be normal if run from a script. Error: {e}")
-#                 # Attempt to load again, in case download was successful but exited
-#                 try:
-#                     NLP = spacy.load(model_name)
-#                     print(f"Successfully loaded spaCy model '{model_name}' after download attempt.")
-#                 except Exception as load_e:
-#                     print(f"Failed to load spaCy model '{model_name}' even after download attempt: {load_e}")
-#                     print("Please ensure you have an internet connection and try installing the model manually in your venv:")
-#                     print(f"python -m spacy download {model_name}")
-#                     NLP = None
-#             except Exception as e:
-#                 print(f"Error downloading or loading spaCy model after download: {e}")
-#                 print("Please ensure you have an internet connection and try installing the model manually in your venv:")
-#                 print(f"python -m spacy download {model_name}")
-#                 NLP = None # Ensure NLP is None if loading fails
-#     return NLP
-# # --- End spaCy Model Loading ---
-
 def fetch_page(url, params=None, retries=3, delay=5):
     """Fetches HTML content from a URL with retries and headers."""
     headers = {
@@ -68,7 +28,7 @@ def fetch_page(url, params=None, retries=3, delay=5):
                 return None
         except requests.exceptions.RequestException as e:
             print(f"    Error fetching {url} (attempt {attempt + 1}/{retries}): {e}")
-        
+            
         if attempt < retries - 1:
             actual_delay = delay + random.uniform(0, delay * 0.5)
             print(f"    Retrying in {actual_delay:.2f} seconds...")
@@ -76,48 +36,6 @@ def fetch_page(url, params=None, retries=3, delay=5):
         else:
             print(f"    Failed to fetch {url} after {retries} attempts.")
     return None
-
-# def extract_skills_from_text(text, known_skills_lower=None):
-#     """Extracts potential skills (nouns, proper nouns, adjectives) from text using spaCy."""
-#     global NLP
-#     if NLP is None:
-#         print("    spaCy model not loaded. Cannot extract skills.")
-#         return []
-
-#     # If you have a predefined list of skills you're looking for:
-#     # For now, we'll extract candidate terms and can filter later.
-#     # Example: known_skills_lower = {"python", "java", "sql", "django", "react", "aws", "api", "javascript"}
-
-#     doc = NLP(text.lower()) # Process text with spaCy
-#     extracted_skills = set()
-
-#     # Extract entities (ORG, PRODUCT might be relevant for technologies)
-#     for ent in doc.ents:
-#         if ent.label_ in ["ORG", "PRODUCT", "TECH", "LANGUAGE"]: # Add custom labels if you train
-#             extracted_skills.add(ent.text)
-
-#     # Extract noun chunks and individual nouns/proper nouns/adjectives
-#     # This is a broader approach if entities don't catch everything.
-#     for token in doc:
-#         if token.pos_ in ["NOUN", "PROPN"] and not token.is_stop and len(token.text) > 1:
-#             extracted_skills.add(token.text)
-#         # Adjectives can sometimes be skills (e.g., "agile")
-#         # if token.pos_ == "ADJ" and not token.is_stop and len(token.text) > 2:
-#         #    extracted_skills.add(token.text)
-
-#     # If using a known_skills_lower list for filtering:
-#     if known_skills_lower:
-#         final_skills = [skill for skill in extracted_skills if skill in known_skills_lower]
-#         return list(set(final_skills)) # Ensure uniqueness
-#     else:
-#         # Basic filtering: remove very short tokens or purely numeric ones
-#         # This is a simple heuristic; more advanced filtering might be needed.
-#         filtered_skills = [
-#             skill for skill in extracted_skills 
-#             if len(skill) > 1 and not skill.isdigit()
-#         ]
-#         return list(set(filtered_skills))
-
 
 def parse_job_detail_page_adzuna(full_job_url):
     print(f"    Fetching details from Adzuna landing page: {full_job_url}")
@@ -139,10 +57,15 @@ def parse_job_detail_page_adzuna(full_job_url):
 
     return "Full description not found on Adzuna landing page (this is expected).", site_name
 
-
 def scrape_adzuna_jobs(query="python developer", location="bangalore", pages=1): # We'll change the default query in main_adzuna
     print(f"Starting Adzuna scrape for '{query}' in '{location}' for {pages} page(s).")
     base_url = "https://www.adzuna.in/search" # Adzuna's base search URL
+    
+    # Get the NLP model and skill keywords from the imported function
+    nlp_model, skill_keywords_list = load_spacy_model()
+    if nlp_model is None:
+        print("Failed to load spaCy model. Exiting scraper.")
+        return
     
     for page_num in range(1, pages + 1):
         params = {
@@ -152,7 +75,6 @@ def scrape_adzuna_jobs(query="python developer", location="bangalore", pages=1):
         }
         print(f"\nScraping Adzuna page {page_num}...")
         html_content = fetch_page(base_url, params=params)
-
         if not html_content:
             print(f"Failed to fetch Adzuna search results page {page_num}. Skipping.")
             continue
@@ -160,14 +82,12 @@ def scrape_adzuna_jobs(query="python developer", location="bangalore", pages=1):
         soup = BeautifulSoup(html_content, 'html.parser')
         
         # --- NEW SELECTOR FOR JOB LISTINGS ---
-        # Based on: <article class="a flex gap-2 md:gap-4 p-3 md:pb-1 border-b ...">
-        # A simpler selector might be 'article.a' if 'a' is a unique enough class for job articles
-        # Or more specific: 'article[class*="border-b"]' if that's consistent for jobs
-        # Let's try the one suggested, but be mindful it might be too specific if classes change slightly
         job_listings = soup.select('article.a.flex.gap-2') 
+        
         # A slightly more robust alternative if the above is too brittle:
-        # job_listings = soup.find_all('article', class_=lambda c: c and 'border-b' in c and 'cursor-pointer' in c)
-
+        if not job_listings:
+            job_listings = soup.find_all('article', class_=lambda c: c and 'border-b' in c and 'cursor-pointer' in c)
+            
         if not job_listings:
             print(f"No job listings found on page {page_num} with current selectors. Adzuna's HTML might have changed or no results for query.")
             # Optional: print a snippet of the HTML to help debug if it fails
@@ -175,14 +95,12 @@ def scrape_adzuna_jobs(query="python developer", location="bangalore", pages=1):
             break 
 
         print(f"Found {len(job_listings)} potential job listings on page {page_num}.")
-
         for job_ad in job_listings:
             # --- NEW SELECTORS FOR INDIVIDUAL ELEMENTS ---
             # Title & URL: <a class="text-base md:text-xl lg:text-2xl text-adzuna-green-500 hover:underline" href="...">
             title_tag = job_ad.select_one('h2 a[href]') # Ensure it's an 'a' tag with an href inside an h2
             if not title_tag: # Fallback if h2 > a structure changes
                 title_tag = job_ad.select_one('a[class*="text-adzuna-green-500"][href]')
-
 
             # Company Name: <div class="ui-company">
             company_tag = job_ad.select_one('div.ui-company')
@@ -193,17 +111,11 @@ def scrape_adzuna_jobs(query="python developer", location="bangalore", pages=1):
             job_location = location_tag.text.strip() if location_tag else "N/A"
 
             # Description Snippet: <div class="max-snippet-height md:overflow-hidden"> or <div class="hidden sm:block"><span>...</span></div>
-            # The provided selector was: '.hidden.sm\\:block span'
-            # The backslash for ':' is for CSS, BeautifulSoup might not need it or handle it differently.
-            # Let's try a few options for robustness.
             description_snippet_tag = job_ad.select_one('div.max-snippet-height span') # If span is direct child
             if not description_snippet_tag:
                 description_snippet_tag = job_ad.select_one('div.max-snippet-height') # Take the div text if span not found
-            if not description_snippet_tag:
-                 # Try the AI's suggestion, being careful with sm:block
-                 # For classes like "sm:block", use "sm\:block" in CSS selectors if using querySelector in browser.
-                 # In BeautifulSoup, you can often select by parts of the class or use a function.
-                 # Let's try finding a div that has 'hidden' and 'sm:block' (or contains 'block') and then its span
+            if not description_snippet_tag: 
+                # Try the AI's suggestion, being careful with sm:block
                 desc_container = job_ad.find('div', class_=lambda c: c and 'hidden' in c and 'block' in c)
                 if desc_container:
                     description_snippet_tag = desc_container.find('span')
@@ -217,13 +129,12 @@ def scrape_adzuna_jobs(query="python developer", location="bangalore", pages=1):
             else:
                 title = "N/A"
 
-
             if title != "N/A" and job_url:
                 # Adzuna URLs in search results are often full URLs to their /land/ad/ page
                 # If they are relative, urljoin will handle it.
                 # The base_url for urljoin should be the domain, not the search path.
                 adzuna_domain_base = "https://www.adzuna.in"
-                full_job_url = urljoin(adzuna_domain_base, job_url) 
+                full_job_url = urljoin(adzuna_domain_base, job_url)
                 
                 print(f"\n  Processing job: {title} at {company}")
                 print(f"    Location: {job_location}")
@@ -233,7 +144,8 @@ def scrape_adzuna_jobs(query="python developer", location="bangalore", pages=1):
                 platform_name = "Adzuna"
                 final_description = description_snippet # Using snippet as the main description for now
                 
-                skills = extract_skills_from_text(final_description)
+                # Use the imported extract_skills_from_text function with correct parameters
+                skills = extract_skills_from_text(final_description, nlp_model, skill_keywords_list)
                 print(f"    Extracted Skills (from snippet): {skills if skills else 'None found'}")
 
                 job_data = {
@@ -249,42 +161,25 @@ def scrape_adzuna_jobs(query="python developer", location="bangalore", pages=1):
                 save_job_to_db(job_data)
             else:
                 print("    Could not find title or job URL for a listing. Skipping.")
-            
-            time.sleep(random.uniform(1.5, 4)) 
-            
-        if not job_listings: # This check is after the loop, should be before if we want to break early
-            break # Already handled above, but good for clarity
+                
+            time.sleep(random.uniform(1.5, 4))
+             
         print(f"Finished page {page_num}. Sleeping before next page...")
         time.sleep(random.uniform(4, 8))
 
     print("\nAdzuna scraping complete. Data saved to database.")
 
-
-
 def main_adzuna(query, location, pages=1):
-    # Ensure spaCy model and keywords are loaded
-    if load_spacy_model() is None:
-        print("Failed to load spaCy model. Exiting scraper.")
-        return
-
-    # init_db() # Redundant if called in __main__ block, can be removed from here
-
-    print(f"Starting job scraping for Adzuna: '{query}' in '{location}' for {pages} page(s).") # Use the parameters
+    print(f"Starting job scraping for Adzuna: '{query}' in '{location}' for {pages} page(s).")
     scrape_adzuna_jobs(query=query, location=location, pages=pages) # Pass the parameters along
-    print("\nAdzuna scraping complete. Data saved to database.") # More specific message
-
+    print("\nAdzuna scraping complete. Data saved to database.")
     
-    #print("\nAll scraping finished.")
-
-# if __name__ == '__main__':
-#     main_adzuna()
 if __name__ == '__main__':
     init_db() # Initialize the database ONCE here
-
     DEFAULT_QUERY = "python developer"
     DEFAULT_LOCATION = "bangalore" 
     DEFAULT_PAGES = 1
-
+    
     print(f"Preparing to scrape Adzuna for query='{DEFAULT_QUERY}', location='{DEFAULT_LOCATION}', pages={DEFAULT_PAGES}")
     main_adzuna(query=DEFAULT_QUERY, location=DEFAULT_LOCATION, pages=DEFAULT_PAGES)
-    print("All scraping finished.") # This is the final message
+    print("All scraping finished.")

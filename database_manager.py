@@ -31,11 +31,11 @@ def init_db():
         description TEXT,
         snippet TEXT,
         source TEXT,
-        date_posted TEXT,
         skills TEXT,
         salary TEXT,
         job_type TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        source_url TEXT,
+        platform TEXT
     )
     ''')
     
@@ -48,24 +48,46 @@ def init_db():
         password TEXT NOT NULL,
         skills TEXT,
         experience_summary TEXT,
-        education_summary TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        education_summary TEXT
     )
     ''')
     
     conn.commit()
     conn.close()
     
-    print(f"Database '{DB_PATH}' initialized and 'jobs' table ensured.")
+    print(f"Database '{DB_PATH}' initialized and tables ensured.")
+
+def save_job_to_db(job_data):
+    """Save a job to the database (alias for add_job for compatibility)."""
+    # Check if job with same title and company already exists to avoid duplicates
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Convert skills list to JSON string if it's a list
+    job_data_copy = job_data.copy()
+    if 'skills' in job_data_copy and isinstance(job_data_copy['skills'], list):
+        job_data_copy['skills'] = json.dumps(job_data_copy['skills'])
+    
+    # Check for duplicates
+    if 'title' in job_data_copy and 'company' in job_data_copy:
+        cursor.execute(
+            "SELECT id FROM jobs WHERE title = ? AND company = ?", 
+            (job_data_copy['title'], job_data_copy['company'])
+        )
+        existing_job = cursor.fetchone()
+        
+        if existing_job:
+            conn.close()
+            print(f"Job already exists: {job_data_copy['title']} at {job_data_copy['company']}")
+            return existing_job[0]  # Return existing job ID
+    
+    conn.close()
+    return add_job(job_data_copy)
 
 def add_job(job_data):
     """Add a job to the database."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    # Convert skills list to JSON string if it's a list
-    if 'skills' in job_data and isinstance(job_data['skills'], list):
-        job_data['skills'] = json.dumps(job_data['skills'])
     
     # Get column names from the job_data dictionary
     columns = ', '.join(job_data.keys())
@@ -86,11 +108,31 @@ def get_all_jobs():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    cursor.execute("SELECT * FROM jobs ORDER BY date_posted DESC")
+    # Only get jobs from scraper (exclude sample jobs)
+    cursor.execute("""
+    SELECT * FROM jobs 
+    WHERE source_url IS NOT NULL
+    """)
+    
     jobs = cursor.fetchall()
     
+    # Convert Row objects to dictionaries
+    jobs_list = []
+    for job in jobs:
+        job_dict = dict(job)
+        
+        # Parse skills from JSON string if needed
+        if 'skills' in job_dict and isinstance(job_dict['skills'], str):
+            try:
+                job_dict['skills'] = json.loads(job_dict['skills'])
+            except json.JSONDecodeError:
+                # If not valid JSON, try splitting by comma
+                job_dict['skills'] = job_dict['skills'].split(',') if job_dict['skills'] else []
+        
+        jobs_list.append(job_dict)
+    
     conn.close()
-    return jobs
+    return jobs_list
 
 def search_jobs_db(query, location, resume_skills=None):
     """
@@ -108,15 +150,15 @@ def search_jobs_db(query, location, resume_skills=None):
     cursor = conn.cursor()
     
     # Prepare search terms
-    query_terms = f"%{query}%" if query else "%"
-    location_terms = f"%{location}%" if location else "%"
+    query_terms = f"%{query}%" if query and query.lower() != 'all' else "%"
+    location_terms = f"%{location}%" if location and location.lower() != 'all' else "%"
     
-    # Basic search query
+    # Basic search query - only include scraped jobs
     cursor.execute("""
     SELECT * FROM jobs 
-    WHERE (title LIKE ? OR description LIKE ? OR company LIKE ?) 
+    WHERE (title LIKE ? OR description LIKE ? OR company LIKE ?)
     AND (location LIKE ?)
-    ORDER BY date_posted DESC
+    AND source_url IS NOT NULL
     """, (query_terms, query_terms, query_terms, location_terms))
     
     jobs = cursor.fetchall()
@@ -160,59 +202,24 @@ def get_job_by_id(job_id):
     cursor.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
     job = cursor.fetchone()
     
+    if job:
+        job_dict = dict(job)
+        
+        # Parse skills from JSON string if needed
+        if 'skills' in job_dict and isinstance(job_dict['skills'], str):
+            try:
+                job_dict['skills'] = json.loads(job_dict['skills'])
+            except json.JSONDecodeError:
+                # If not valid JSON, try splitting by comma
+                job_dict['skills'] = job_dict['skills'].split(',') if job_dict['skills'] else []
+        
+        conn.close()
+        return job_dict
+    
     conn.close()
-    return dict(job) if job else None
+    return None
 
-def add_sample_jobs():
-    """Add sample jobs to the database for testing."""
-    sample_jobs = [
-        {
-            'title': 'Python Developer',
-            'company': 'Tech Solutions Inc.',
-            'location': 'London, UK',
-            'url': 'https://example.com/jobs/1',
-            'description': 'We are looking for a Python developer with experience in Flask and Django.',
-            'snippet': 'Python developer needed for web application development using Flask and Django.',
-            'source': 'Sample Data',
-            'date_posted': datetime.now().strftime('%Y-%m-%d'),
-            'skills': json.dumps(['Python', 'Flask', 'Django', 'SQL', 'Git']),
-            'salary': '£50,000 - £65,000',
-            'job_type': 'Full-time'
-        },
-        {
-            'title': 'Data Scientist',
-            'company': 'Data Insights Ltd.',
-            'location': 'Remote',
-            'url': 'https://example.com/jobs/2',
-            'description': 'Join our team as a Data Scientist working on machine learning models.',
-            'snippet': 'Data Scientist position available for someone with strong ML skills.',
-            'source': 'Sample Data',
-            'date_posted': datetime.now().strftime('%Y-%m-%d'),
-            'skills': json.dumps(['Python', 'Machine Learning', 'TensorFlow', 'SQL', 'Statistics']),
-            'salary': '£60,000 - £75,000',
-            'job_type': 'Full-time'
-        },
-        {
-            'title': 'Frontend Developer',
-            'company': 'Web Creations',
-            'location': 'Manchester, UK',
-            'url': 'https://example.com/jobs/3',
-            'description': 'Frontend developer needed to work on responsive web applications.',
-            'snippet': 'Looking for a frontend developer with React experience.',
-            'source': 'Sample Data',
-            'date_posted': datetime.now().strftime('%Y-%m-%d'),
-            'skills': json.dumps(['JavaScript', 'React', 'HTML', 'CSS', 'Git']),
-            'salary': '£45,000 - £55,000',
-            'job_type': 'Full-time'
-        }
-    ]
-    
-    for job in sample_jobs:
-        add_job(job)
-    
-    print(f"Added {len(sample_jobs)} sample jobs to the database.")
-
-# If this file is run directly, initialize the database and add sample jobs
+# If this file is run directly, initialize the database
 if __name__ == "__main__":
     init_db()
-    add_sample_jobs()
+    print("Database initialized. No sample jobs added.")
