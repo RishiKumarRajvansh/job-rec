@@ -34,7 +34,6 @@ def load_spacy_model(model_name='en_core_web_sm'):
             print(f"Skills keywords file not found. Using default list with {len(skill_keywords)} skills.")
         
         return nlp, skill_keywords
-    
     except Exception as e:
         print(f"Error loading spaCy model or skill keywords: {e}")
         return None, []
