@@ -2,6 +2,11 @@
 {% block title %}Jobs - Job Recommender{% endblock %}
 {% block content %}
 <div class="container mt-4">
+    <!-- Hidden inputs to store values for debugging -->
+    <input type="hidden" id="query-value" value="{{ query }}">
+    <input type="hidden" id="location-value" value="{{ location }}">
+    <input type="hidden" id="run-scraper-flag" value="{{ 'true' if run_scraper else 'false' }}">
+
     <!-- Loading indicator (initially shown if run_scraper is true) -->
     <div id="loading-container" class="text-center py-5" {% if not run_scraper %}style="display: none;"{% endif %}>
         <div class="spinner-border text-primary" role="status">
@@ -35,6 +40,7 @@
                 </a>
             </div>
         </div>
+
         {% if resume_skills %}
         <div class="row mb-4">
             <div class="col-12">
@@ -56,6 +62,7 @@
             </div>
         </div>
         {% endif %}
+
         <div class="row" id="jobs-container">
             {% if jobs %}
                 {% for job in jobs %}
@@ -121,6 +128,7 @@
     </div>
 </div>
 
+
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     {% if run_scraper %}
@@ -138,6 +146,8 @@ document.addEventListener('DOMContentLoaded', function() {
     loadingContainer.style.display = 'block';
     jobsContent.style.display = 'none';
     
+    console.log('Running scraper with query:', '{{ query }}', 'location:', '{{ location }}');
+    
     // Send AJAX request to run scraper
     fetch('/run_scraper_api', {
         method: 'POST',
@@ -151,21 +161,27 @@ document.addEventListener('DOMContentLoaded', function() {
         return response.json();
     })
     .then(data => {
+        console.log('Scraper API response:', data); // Debug output
+        
         // Hide loading indicator
         loadingContainer.style.display = 'none';
         jobsContent.style.display = 'block';
         
         if (data.status === 'success') {
             if (data.jobs && data.jobs.length > 0) {
+                console.log(`Found ${data.jobs.length} jobs`);
+                
                 // Clear existing jobs
                 jobsContainer.innerHTML = '';
                 
                 // Add jobs to the container
                 data.jobs.forEach(job => {
+                    console.log('Processing job:', job.title, 'at', job.company);
                     const jobCard = createJobCard(job);
                     jobsContainer.appendChild(jobCard);
                 });
             } else {
+                console.log('No jobs found in API response');
                 // No jobs found
                 jobsContainer.innerHTML = `
                     <div class="col-12">
@@ -177,6 +193,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 `;
             }
         } else {
+            console.error('API returned error:', data.message);
             // Error message
             jobsContainer.innerHTML = `
                 <div class="col-12">
@@ -189,6 +206,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     })
     .catch(error => {
+        console.error('Fetch error:', error);
         // Hide loading indicator and show error
         loadingContainer.style.display = 'none';
         jobsContent.style.display = 'block';
@@ -200,41 +218,83 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
             </div>
         `;
-        console.error('Error:', error);
     });
     {% endif %}
     
     // Function to create a job card
     function createJobCard(job) {
+        console.log('Creating card for job:', job.title);
+        
         const col = document.createElement('div');
         col.className = 'col-md-6 mb-4';
         
         // Calculate match percentage if resume skills are available
-        let matchPercentage = '';
+        let matchPercentage = 0;
+        let matchingSkillsCount = 0;
         const resumeSkills = {{ resume_skills|tojson }};
-        if (resumeSkills && resumeSkills.length > 0 && job.matching_resume_skills !== undefined) {
-            matchPercentage = Math.round((job.matching_resume_skills / resumeSkills.length) * 100);
+        
+        if (resumeSkills && resumeSkills.length > 0) {
+            // Check all possible properties where matching skills might be stored
+            if (job.matching_skills && Array.isArray(job.matching_skills)) {
+                matchingSkillsCount = job.matching_skills.length;
+            } else if (typeof job.matching_resume_skills === 'number') {
+                matchingSkillsCount = job.matching_resume_skills;
+            } else if (job.match_percentage) {
+                matchPercentage = job.match_percentage;
+                // If we have percentage but not count, estimate count
+                if (!matchingSkillsCount) {
+                    matchingSkillsCount = Math.round((matchPercentage / 100) * resumeSkills.length);
+                }
+            }
+            
+            // Calculate percentage if we only have count
+            if (matchingSkillsCount > 0 && !matchPercentage) {
+                matchPercentage = Math.round((matchingSkillsCount / resumeSkills.length) * 100);
+            }
         }
         
         // Create card header for matching skills
         let cardHeaderHtml = '';
-        if (resumeSkills && resumeSkills.length > 0 && job.matching_resume_skills > 0) {
+        if (resumeSkills && resumeSkills.length > 0 && matchingSkillsCount > 0) {
             cardHeaderHtml = `
                 <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
                     <span>
                         <i class="bi bi-check-circle me-1"></i>
-                        ${job.matching_resume_skills} matching skills
+                        ${matchingSkillsCount} matching skills
                     </span>
                     <span class="badge bg-light text-dark">${matchPercentage}% match</span>
                 </div>
             `;
         }
         
+        // Ensure job.skills is an array
+        let jobSkills = [];
+        if (job.skills) {
+            if (Array.isArray(job.skills)) {
+                jobSkills = job.skills;
+            } else if (typeof job.skills === 'string') {
+                try {
+                    // Try parsing as JSON
+                    jobSkills = JSON.parse(job.skills);
+                } catch (e) {
+                    // If parsing fails, treat as comma-separated string
+                    jobSkills = job.skills.split(',').map(s => s.trim()).filter(s => s);
+                }
+            }
+        }
+        
+        console.log('Job skills:', jobSkills);
+        
         // Format skills badges
         let skillsHtml = '';
-        if (job.skills && job.skills.length > 0) {
-            const skillBadges = job.skills.map(skill => {
-                const isMatchingSkill = resumeSkills && resumeSkills.includes(skill);
+        if (jobSkills && jobSkills.length > 0) {
+            const skillBadges = jobSkills.map(skill => {
+                if (!skill) return '';
+                
+                const isMatchingSkill = resumeSkills && resumeSkills.some(s => 
+                    s.toLowerCase() === (typeof skill === 'string' ? skill.toLowerCase() : String(skill).toLowerCase())
+                );
+                
                 return `
                     <span class="badge ${isMatchingSkill ? 'bg-success' : 'bg-secondary'}">
                         ${skill}
@@ -252,19 +312,29 @@ document.addEventListener('DOMContentLoaded', function() {
             `;
         }
         
+        // Get snippet or description
+        let snippetText = 'No description available';
+        if (job.snippet) {
+            snippetText = job.snippet;
+        } else if (job.description) {
+            snippetText = typeof job.description === 'string' && job.description.length > 150 
+                ? job.description.substring(0, 150) + '...' 
+                : job.description;
+        }
+        
         // Create the card HTML
         col.innerHTML = `
-            <div class="card h-100 ${(resumeSkills && job.matching_resume_skills > 0) ? 'border-success' : ''}">
+            <div class="card h-100 ${(resumeSkills && matchingSkillsCount > 0) ? 'border-success' : ''}">
                 ${cardHeaderHtml}
                 <div class="card-body">
-                    <h5 class="card-title">${job.title}</h5>
-                    <h6 class="card-subtitle mb-2 text-muted">${job.company}</h6>
+                    <h5 class="card-title">${job.title || 'Untitled Position'}</h5>
+                    <h6 class="card-subtitle mb-2 text-muted">${job.company || 'Unknown Company'}</h6>
                     <p class="card-text">
                         <i class="bi bi-geo-alt me-1"></i>${job.location || 'Location not specified'}<br>
                         ${job.salary ? `<i class="bi bi-cash me-1"></i>${job.salary}<br>` : ''}
                         ${job.job_type ? `<i class="bi bi-briefcase me-1"></i>${job.job_type}` : ''}
                     </p>
-                    <p class="card-text">${job.snippet || (job.description ? job.description.substring(0, 150) + '...' : 'No description available')}</p>
+                    <p class="card-text">${snippetText}</p>
                     
                     ${skillsHtml}
                     
@@ -286,4 +356,5 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 </script>
+
 {% endblock %}

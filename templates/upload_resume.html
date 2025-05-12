@@ -1,34 +1,27 @@
 {% extends "base.html" %}
 {% block title %}Upload Resume - Job Recommender{% endblock %}
 {% block content %}
-<div class="container mt-4">
-    <div class="row">
-        <div class="col-md-8 offset-md-2">
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-6">
             <div class="card">
-                <div class="card-header">
-                    <h2>Upload Your Resume</h2>
+                <div class="card-header bg-primary text-white">
+                    <h4 class="mb-0">Upload Your Resume</h4>
                 </div>
                 <div class="card-body">
-                    <p class="mb-4">Upload your resume to extract your skills and find matching jobs. We support PDF, DOCX, and TXT files.</p>
-                    
-                    <form method="POST" enctype="multipart/form-data">
+                    <p class="card-text">
+                        Upload your resume to help us find jobs that match your skills and experience.
+                    </p>
+                    <form method="POST" action="{{ url_for('upload_resume') }}" enctype="multipart/form-data">
                         <div class="mb-3">
-                            <label for="resume" class="form-label">Select Resume File</label>
-                            <input class="form-control" type="file" id="resume" name="resume" accept=".pdf,.docx,.txt" required>
-                            <div class="form-text">Maximum file size: 16MB</div>
+                            <label for="resume" class="form-label">Resume File</label>
+                            <input type="file" class="form-control" id="resume" name="resume" required>
+                            <div class="form-text">Supported formats: PDF, DOCX, TXT</div>
                         </div>
-                        <div class="mb-3">
-                            <button type="submit" class="btn btn-primary">
-                                <i class="bi bi-upload me-1"></i>Upload and Process
-                            </button>
+                        <div class="d-grid">
+                            <button type="submit" class="btn btn-primary">Upload and Analyze</button>
                         </div>
                     </form>
-                </div>
-                <div class="card-footer bg-light">
-                    <small class="text-muted">
-                        <i class="bi bi-info-circle me-1"></i>
-                        Your resume will be processed to extract skills and then deleted from our servers. We do not store your resume file.
-                    </small>
                 </div>
             </div>
         </div>

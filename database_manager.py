@@ -61,11 +61,34 @@ def clear_jobs_table():
     """Clear all jobs from the database to prepare for fresh scraping."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM jobs")
-    conn.commit()
-    conn.close()
-    print("Jobs table cleared for fresh scraping.")
+    try:
+        cursor.execute("DELETE FROM jobs")
+        conn.commit()
+        print("Jobs table cleared for fresh scraping.")
+    except sqlite3.Error as e:
+        print(f"Error clearing jobs table: {e}")
+        conn.rollback()  # Rollback any changes in case of error
+        raise  # Re-raise the exception to be handled upstream
+    finally:
+        conn.close()
 
+def clear_jobs_database():
+    """
+    Clear all jobs from the database before a new scraping session
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("DELETE FROM jobs")
+        conn.commit()
+        print("Jobs database cleared successfully")
+    except Exception as e:
+        print(f"Error clearing jobs database: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+        
 def save_job_to_db(job_data):
     """Save a job to the database (alias for add_job for compatibility)."""
     # Check if job with same title and company already exists to avoid duplicates
@@ -135,42 +158,150 @@ def get_all_jobs():
                 # If not valid JSON, try splitting by comma
                 job_dict['skills'] = job_dict['skills'].split(',') if job_dict['skills'] else []
         
-        jobs_list.append(job_dict)
+        jobs_list.append(job_dict)  # This line is incorrectly indented in your code
     
     conn.close()
     return jobs_list
 
-def search_jobs_db(query, location, resume_skills=None):
+
+# def search_jobs_db(query, location, resume_skills=None):
+#     """
+#     Search for jobs in the database based on query and location.
+    
+#     Args:
+#         query (str): Job title or keywords
+#         location (str): Job location
+#         resume_skills (list): List of skills from the user's resume
+        
+#     Returns:
+#         list: List of matching jobs
+#     """
+#     conn = get_db_connection()
+#     cursor = conn.cursor()
+    
+#     # Prepare search terms
+#     query_terms = f"%{query}%" if query and query.lower() != 'all' else "%"
+#     location_terms = f"%{location}%" if location and location.lower() != 'all' else "%"
+    
+#     # Basic search query
+#     cursor.execute("""
+#     SELECT * FROM jobs 
+#     WHERE (title LIKE ? OR description LIKE ? OR company LIKE ?)
+#     AND (location LIKE ?)
+#     """, (query_terms, query_terms, query_terms, location_terms))
+    
+#     jobs = cursor.fetchall()
+#     conn.close()
+    
+#     # Convert SQLite Row objects to dictionaries
+#     jobs_list = []
+#     for job in jobs:
+#         job_dict = dict(job)
+        
+#         # Parse skills from JSON string if needed
+#         if 'skills' in job_dict and isinstance(job_dict['skills'], str):
+#             try:
+#                 job_dict['skills'] = json.loads(job_dict['skills'])
+#             except json.JSONDecodeError:
+#                 # If not valid JSON, try splitting by comma
+#                 job_dict['skills'] = job_dict['skills'].split(',') if job_dict['skills'] else []
+        
+#         jobs_list.append(job_dict)
+    
+#     # If resume skills are provided, calculate matching skills and sort by matches
+#     if resume_skills:
+#         for job in jobs_list:
+#             job_skills = [s.lower() for s in job.get('skills', [])]
+#             resume_skills_lower = [s.lower() for s in resume_skills]
+            
+#             # Count matching skills
+#             matching_skills = sum(1 for s in resume_skills_lower if s in job_skills)
+#             job['matching_resume_skills'] = matching_skills
+        
+#         # Sort by number of matching skills (descending)
+#         jobs_list.sort(key=lambda x: x.get('matching_resume_skills', 0), reverse=True)
+    
+#     return jobs_list
+def search_jobs_db(query, location, resume_skills=None, match_any=True):
     """
     Search for jobs in the database based on query and location.
     
     Args:
-        query (str): Job title or keywords
-        location (str): Job location
-        resume_skills (list): List of skills from the user's resume
+        query (str): Search query
+        location (str): Location to search in
+        resume_skills (list): List of skills from resume
+        match_any (bool): If True, match any skill; if False, match all skills
         
     Returns:
         list: List of matching jobs
     """
+    print(f"Searching jobs with query: '{query}', location: '{location}'")
+    
+    if resume_skills:
+        print(f"Using resume skills: {resume_skills}")
+    
     conn = get_db_connection()
-    cursor = conn.cursor()
     
-    # Prepare search terms
-    query_terms = f"%{query}%" if query and query.lower() != 'all' else "%"
-    location_terms = f"%{location}%" if location and location.lower() != 'all' else "%"
+    # Modify location search to handle NCR/Delhi equivalence
+    location_search = location
+    if location.lower() == 'delhi':
+        # Search for either Delhi or NCR
+        location_condition = "(location LIKE ? OR location LIKE ?)"
+        location_params = [f"%{location}%", "%NCR%"]
+    else:
+        location_condition = "location LIKE ?"
+        location_params = [f"%{location}%"]
     
-    # Basic search query
-    cursor.execute("""
-    SELECT * FROM jobs 
-    WHERE (title LIKE ? OR description LIKE ? OR company LIKE ?)
-    AND (location LIKE ?)
-    """, (query_terms, query_terms, query_terms, location_terms))
+    if query.lower() == 'all' and location.lower() == 'all':
+        # Return all jobs
+        jobs = conn.execute('SELECT * FROM jobs').fetchall()
+    elif resume_skills and match_any:
+        # Match any skill from resume
+        # Create a SQL query with multiple LIKE conditions for skills
+        sql_query = "SELECT * FROM jobs WHERE ("
+        
+        # Add conditions for each skill
+        skill_conditions = []
+        params = []
+        for skill in resume_skills:
+            skill_conditions.append(f"title LIKE ? OR description LIKE ? OR company LIKE ? OR snippet LIKE ?")
+            params.extend([f"%{skill}%", f"%{skill}%", f"%{skill}%", f"%{skill}%"])
+        
+        sql_query += " OR ".join(skill_conditions)
+        sql_query += ")"
+        
+        # Add location condition if specified
+        if location.lower() != 'all':
+            sql_query += f" AND {location_condition}"
+            params.extend(location_params)
+        
+        print("SQL Query: ", sql_query)
+        print("Params:", params)
+        
+        jobs = conn.execute(sql_query, params).fetchall()
+    else:
+        # Simple search with query and location
+        if query.lower() == 'all':
+            if location.lower() == 'all':
+                sql_query = "SELECT * FROM jobs"
+                params = []
+            else:
+                sql_query = f"SELECT * FROM jobs WHERE {location_condition}"
+                params = location_params
+        elif location.lower() == 'all':
+            sql_query = "SELECT * FROM jobs WHERE title LIKE ? OR description LIKE ? OR company LIKE ? OR snippet LIKE ?"
+            params = [f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%"]
+        else:
+            sql_query = f"SELECT * FROM jobs WHERE (title LIKE ? OR description LIKE ? OR company LIKE ? OR snippet LIKE ?) AND {location_condition}"
+            params = [f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%"] + location_params
+        
+        print("SQL Query: ", sql_query)
+        print("Params:", params)
+        
+        jobs = conn.execute(sql_query, params).fetchall()
     
-    jobs = cursor.fetchall()
-    conn.close()
-    
-    # Convert SQLite Row objects to dictionaries
-    jobs_list = []
+    # Convert rows to dictionaries
+    job_list = []
     for job in jobs:
         job_dict = dict(job)
         
@@ -182,22 +313,36 @@ def search_jobs_db(query, location, resume_skills=None):
                 # If not valid JSON, try splitting by comma
                 job_dict['skills'] = job_dict['skills'].split(',') if job_dict['skills'] else []
         
-        jobs_list.append(job_dict)
-    
-    # If resume skills are provided, calculate matching skills and sort by matches
-    if resume_skills:
-        for job in jobs_list:
-            job_skills = [s.lower() for s in job.get('skills', [])]
-            resume_skills_lower = [s.lower() for s in resume_skills]
+        # Calculate matching skills if resume_skills is provided
+        if resume_skills:
+            job_skills = job_dict.get('skills', [])
+            if isinstance(job_skills, str):
+                job_skills = job_skills.split(',')
             
-            # Count matching skills
-            matching_skills = sum(1 for s in resume_skills_lower if s in job_skills)
-            job['matching_resume_skills'] = matching_skills
+            job_skills_lower = [s.lower() for s in job_skills]
+            resume_skills_lower = [s.lower() for s in resume_skills]
+            matching_skills = [skill for skill in resume_skills_lower if skill.lower() in job_skills_lower]
+            job_dict['matching_skills'] = matching_skills
+            job_dict['matching_resume_skills'] = len(matching_skills)
+            job_dict['match_percentage'] = round((len(matching_skills) / len(resume_skills)) * 100) if resume_skills else 0
         
-        # Sort by number of matching skills (descending)
-        jobs_list.sort(key=lambda x: x.get('matching_resume_skills', 0), reverse=True)
+        job_list.append(job_dict)
     
-    return jobs_list
+    # Sort by match percentage if resume_skills is provided
+    if resume_skills:
+        job_list.sort(key=lambda x: x.get('match_percentage', 0), reverse=True)
+    
+    print(f"Found {len(job_list)} jobs matching the criteria")
+    if job_list:
+        print(f"First job: {job_list[0]['title']} at {job_list[0].get('company', 'Unknown')}")
+    
+    conn.close()
+    return job_list
+
+
+
+
+
 
 def get_job_by_id(job_id):
     """Get a job by its ID."""

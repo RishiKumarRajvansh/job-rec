@@ -8,7 +8,13 @@ import json
 import subprocess
 import sys  # Make sure to import sys
 import time
+import traceback  # Import traceback to resolve the "traceback is not defined" error
 from werkzeug.utils import secure_filename
+import spacy  # Import spacy to resolve the "spacy is not defined" error
+from nlp_utils import extract_skills_from_text
+from database_manager import get_all_jobs, search_jobs_db, clear_jobs_table, init_db
+from nlp_utils import extract_skills_from_text, extract_location_from_text
+from resume_parser import parse_resume, extract_text_from_pdf, extract_text_from_docx, extract_text_from_txt
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -66,22 +72,18 @@ def ensure_spacy_installed():
     except ImportError:
         print("spaCy not found. Installing...")
         try:
-            # Use a more robust installation command with full output capture
             result = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "spacy"],
                 capture_output=True,
                 text=True,
-                check=False  # Don't raise exception on non-zero exit
+                check=False
             )
             
             if result.returncode != 0:
                 print(f"Error installing spaCy: {result.stderr}")
                 return False
-                
-            print("spaCy installation output:", result.stdout)
-            print("spaCy installed successfully.")
             
-            # Verify installation worked by trying to import again
+            # Verify installation worked
             try:
                 import spacy
                 return True
@@ -91,6 +93,7 @@ def ensure_spacy_installed():
         except Exception as e:
             print(f"Failed to install spaCy: {e}")
             return False
+
 
 def ensure_model_downloaded(model_name='en_core_web_sm'):
     """Ensure the spaCy model is downloaded."""
@@ -135,56 +138,56 @@ def ensure_model_downloaded(model_name='en_core_web_sm'):
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def run_scraper(query=None, location=None):
-    """Run the scraper.py script with optional query and location parameters"""
+def run_scraper(query="All", location="All"):
+    """
+    Run the job scraper with the specified query and location.
+    
+    Args:
+        query (str): Job search query
+        location (str): Location to search in
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
     try:
-        # Ensure spaCy is installed before running the scraper
-        print("Checking if spaCy is installed...")
-        if not ensure_spacy_installed():
-            print("Failed to install spaCy. Aborting scraper.")
-            return False
+        print(f"Running scraper with query='{query}', location='{location}'")
         
-        print("Checking if spaCy model is downloaded...")
-        if not ensure_model_downloaded():
-            print("Failed to download spaCy model. Aborting scraper.")
-            return False
-        
-        # Create a modified environment with the current Python path
-        env = os.environ.copy()
-        
-        # Clear existing jobs before scraping new ones
+        # Initialize database and ensure tables exist
+        init_db()
         clear_jobs_table()
         
-        # Build command with parameters if provided
-        cmd = [sys.executable, "scraper.py"]  # Use sys.executable to ensure same Python interpreter
-        if query and query.lower() != 'all':
-            cmd.extend(["--query", query])
-        if location and location.lower() != 'all':
-            cmd.extend(["--location", location])
+        # Ensure spaCy is installed and model is downloaded
+        ensure_spacy_installed()
         
-        print("Running scraper with command:", " ".join(cmd))
+        # Prepare and run the scraper process
+        scraper_command = [sys.executable, "scraper.py"]
         
-        # Run the scraper process with the modified environment
-        process = subprocess.Popen(
-            cmd, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE,
-            env=env,
+        # Always pass the arguments, the scraper will handle "All" values internally
+        scraper_command.extend(["--query", query])
+        scraper_command.extend(["--location", location])
+        
+        print(f"Running scraper with command: {' '.join(scraper_command)}")
+        
+        result = subprocess.run(
+            scraper_command,
+            capture_output=True,
             text=True
         )
         
-        stdout, stderr = process.communicate(timeout=60)  # 60 second timeout
-        
-        if process.returncode != 0:
-            print(f"Scraper error: {stderr}")
+        if result.returncode != 0:
+            print(f"Scraper failed with error: {result.stderr}")
             return False
         
-        print("Scraper output:", stdout)
+        print(f"Scraper output: {result.stdout}")
         print("Scraper completed successfully")
+        
         return True
     except Exception as e:
         print(f"Error running scraper: {str(e)}")
+        traceback.print_exc()
         return False
+
+
 
 @app.route('/')
 def index():
@@ -267,44 +270,95 @@ def list_all_jobs():
 @login_required
 def run_scraper_api():
     """API endpoint to run the scraper and return results"""
-    query = request.form.get('query', 'all')
-    location = request.form.get('location', 'all')
+    try:
+        query = request.form.get('query', 'all')
+        location = request.form.get('location', 'all')
+        
+        # Get resume skills
+        resume_skills = session.get('resume_skills', [])
+        
+        # If query is "All" and we have resume skills, use top skills for the query
+        if (query.lower() == 'all' or not query) and resume_skills:
+            # Use top 3 skills for the query
+            query = " ".join(resume_skills[:3])
+            print(f"Using resume skills for query: {query}")
+        
+        # Initialize database and ensure tables exist
+        from database_manager import init_db, clear_jobs_table, get_all_jobs
+        init_db()
+        clear_jobs_table()
+        
+        # Run the scraper with the modified query
+        if not run_scraper(query, location):
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to run job scraper. Please try again.'
+            }), 500
+        
+        # Get all jobs from the database
+        jobs = get_all_jobs()
+        
+        # If no jobs found after scraping
+        if not jobs:
+            return jsonify({
+                'status': 'success', 
+                'message': 'No jobs found.',
+                'jobs': []
+            })
+        
+        # Compare job skills with resume skills
+        for job in jobs:
+            job_skills = job.get('skills', [])
+            if job_skills and resume_skills:
+                matching_skills = set(s.lower() for s in job_skills) & set(s.lower() for s in resume_skills)
+                job['matching_skills'] = list(matching_skills)
+                job['skill_match_percentage'] = int(len(matching_skills) / len(resume_skills) * 100) if resume_skills else 0
+            else:
+                job['matching_skills'] = []
+                job['skill_match_percentage'] = 0
+        
+        # Sort jobs by skill match percentage
+        jobs = sorted(jobs, key=lambda x: x.get('skill_match_percentage', 0), reverse=True)
+        
+        total_jobs = len(jobs)
+        print(f"Found {total_jobs} jobs matching the criteria")
+        if total_jobs > 0:
+            print(f"First job: {jobs[0].get('title')} at {jobs[0].get('company')}")
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'Found {total_jobs} jobs matching your criteria.',
+            'jobs': jobs
+        })
     
-    # Run the scraper
-    success = run_scraper(query, location)
-    
-    if not success:
+    except Exception as e:
+        print(f"Error in run_scraper_api: {str(e)}")
+        traceback.print_exc()
         return jsonify({
             'status': 'error',
-            'message': 'Failed to run scraper. Please try again.'
+            'message': f'An error occurred: {str(e)}'
         }), 500
-    
-    # Get the jobs from the database
-    if query.lower() == 'all' and location.lower() == 'all':
-        jobs = get_all_jobs()
-    else:
-        jobs = search_jobs_db(query, location, session.get('resume_skills', []))
-    
-    # Process jobs for JSON serialization
-    processed_jobs = []
-    for job in jobs:
-        job_dict = dict(job)
-        
-        # Ensure skills is a list
-        if isinstance(job_dict.get('skills'), str):
-            try:
-                job_dict['skills'] = json.loads(job_dict['skills'])
-            except json.JSONDecodeError:
-                job_dict['skills'] = job_dict['skills'].split(',') if job_dict['skills'] else []
-        
-        processed_jobs.append(job_dict)
-    
-    return jsonify({
-        'status': 'success',
-        'jobs': processed_jobs,
-        'count': len(processed_jobs)
-    })
 
+
+# @app.route('/search', methods=['POST'])
+# @login_required
+# def search():
+#     form = JobSearchForm()
+#     if form.validate_on_submit():
+#         query = form.query.data
+#         location = form.location.data
+#         resume_skills = session.get('resume_skills', [])
+        
+#         # Render the template with a flag to indicate we need to run the scraper
+#         return render_template('jobs_list.html',
+#                                jobs=[],
+#                                query=query,
+#                                location=location,
+#                               resume_skills=resume_skills,
+#                                current_year=datetime.now().year,
+#                               run_scraper=True)  # Flag to trigger scraping in the template
+    
+#     return redirect(url_for('index'))
 @app.route('/search', methods=['POST'])
 @login_required
 def search():
@@ -312,40 +366,185 @@ def search():
     if form.validate_on_submit():
         query = form.query.data
         location = form.location.data
+        
+        # Use resume location if available and no specific location is provided
+        if location.lower() == 'all' and 'resume_location' in session and session['resume_location']:
+            location = session['resume_location']
+            flash(f"Using location from your resume: {location}", "info")
+        
+        # Use resume skills for the query if no specific query is provided
         resume_skills = session.get('resume_skills', [])
+        if query.lower() == 'all' and resume_skills:
+            # Use the first few skills as the query
+            query = " ".join(resume_skills[:3])
+            flash(f"Using skills from your resume for search: {query}", "info")
         
         # Render the template with a flag to indicate we need to run the scraper
         return render_template('jobs_list.html',
-                               jobs=[],
-                               query=query,
-                               location=location,
+                              jobs=[],
+                              query=query,
+                              location=location,
                               resume_skills=resume_skills,
-                               current_year=datetime.now().year,
+                              current_year=datetime.now().year,
                               run_scraper=True)  # Flag to trigger scraping in the template
     
     return redirect(url_for('index'))
 
+
 @app.route('/upload_resume', methods=['GET', 'POST'])
 @login_required
 def upload_resume():
+    """Upload and process a resume file"""
     if request.method == 'POST':
         if 'resume' not in request.files:
-            flash('No file part', 'danger')
-            return redirect(request.url)
+            flash('No file part', 'error')
+            return redirect(request.referrer or url_for('index'))
+            
         file = request.files['resume']
         if file.filename == '':
-            flash('No selected file', 'danger')
-            return redirect(request.url)
+            flash('No selected file', 'error')
+            return redirect(request.referrer or url_for('index'))
+            
         if file and allowed_file(file.filename):
-            # For now, just use some mock skills instead of parsing the resume
-            mock_skills = ["Python", "JavaScript", "SQL", "Git", "HTML", "CSS"]
-            session['resume_skills'] = mock_skills
-            flash(f"Resume processed! Found skills: {', '.join(mock_skills)}", 'success')
-            return redirect(url_for('index'))
+            try:
+                # Save the file temporarily
+                filename = secure_filename(file.filename)
+                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+                file.save(file_path)
+                
+                # Load NLP model
+                nlp = spacy.load("en_core_web_sm")
+                
+                # Extract text based on file type
+                file_extension = os.path.splitext(filename)[1].lower()
+                if file_extension == '.pdf':
+                    text = extract_text_from_pdf(file_path)
+                elif file_extension == '.docx':
+                    text = extract_text_from_docx(file_path)
+                elif file_extension == '.txt':
+                    text = extract_text_from_txt(file_path)
+                else:
+                    raise ValueError('Unsupported file format')
+                
+                # Process the text
+                skills = extract_skills_from_text(text, nlp)
+                location = extract_location_from_text(text, nlp)
+                
+                # Store in session
+                session['resume_skills'] = skills
+                session['resume_location'] = location
+                
+                flash('Resume processed successfully', 'success')
+                return redirect(url_for('index'))
+                
+            except Exception as e:
+                flash(f'Error processing resume: {str(e)}', 'error')
+            finally:
+                # Clean up temporary file
+                if os.path.exists(file_path):
+                    os.remove(file_path)
         else:
-            flash('File type not allowed. Please upload TXT, PDF, or DOCX.', 'warning')
-            return redirect(request.url)
+            flash('Invalid file format. Please upload a PDF, DOCX, or TXT file.', 'error')
+    
     return render_template('upload_resume.html', current_year=datetime.now().year)
+
+
+
+@app.route('/debug_resume_parser', methods=['GET', 'POST'])
+@login_required
+def debug_resume_parser():
+    """Debug route to test resume parsing directly"""
+    if request.method == 'GET':
+        return render_template('debug_resume.html', current_year=datetime.now().year)
+    
+    if 'resume' not in request.files:
+        return jsonify({'error': 'No file part'})
+    
+    file = request.files['resume']
+    
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'})
+    
+    if file and allowed_file(file.filename):
+        # Save the file temporarily
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+        
+        debug_info = {
+            'file_path': file_path,
+            'file_size': os.path.getsize(file_path),
+            'file_exists': os.path.exists(file_path),
+            'steps': []
+        }
+        
+        try:
+            # Step 1: Load NLP model
+            debug_info['steps'].append({'step': 'Loading NLP model'})
+            nlp_model = spacy.load("en_core_web_sm")
+            debug_info['steps'].append({'step': 'NLP model loaded successfully'})
+            
+            # Step 2: Import functions
+            debug_info['steps'].append({'step': 'Importing functions'})
+            from nlp_utils import extract_skills_from_text
+            from resume_parser import parse_resume, extract_text_from_pdf, extract_text_from_docx, extract_text_from_txt
+            debug_info['steps'].append({'step': 'Functions imported successfully'})
+            
+            # Step 3: Extract text based on file extension
+            debug_info['steps'].append({'step': 'Extracting text from file'})
+            file_extension = os.path.splitext(file_path)[1].lower()
+            
+            if file_extension == '.pdf':
+                extracted_text = extract_text_from_pdf(file_path)
+            elif file_extension == '.docx':
+                extracted_text = extract_text_from_docx(file_path)
+            elif file_extension == '.txt':
+                extracted_text = extract_text_from_txt(file_path)
+            else:
+                extracted_text = "Unsupported file format"
+            
+            debug_info['text_length'] = len(extracted_text)
+            debug_info['text_preview'] = extracted_text[:500] + '...' if len(extracted_text) > 500 else extracted_text
+            debug_info['steps'].append({'step': f'Text extracted successfully, length: {len(extracted_text)}'})
+            
+            # Step 4: Extract skills
+            debug_info['steps'].append({'step': 'Extracting skills'})
+            extracted_skills = extract_skills_from_text(extracted_text, nlp_model)
+            debug_info['skills'] = extracted_skills
+            debug_info['steps'].append({'step': f'Skills extracted successfully, count: {len(extracted_skills)}'})
+            
+            # Step 5: Extract location
+            debug_info['steps'].append({'step': 'Extracting location'})
+            from resume_parser import extract_location_from_text
+            extracted_location = extract_location_from_text(extracted_text, nlp_model)
+            debug_info['location'] = extracted_location
+            debug_info['steps'].append({'step': f'Location extracted: {extracted_location}'})
+            
+            # Clean up
+            os.remove(file_path)
+            debug_info['steps'].append({'step': 'Temporary file removed'})
+            
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            debug_info['error'] = str(e)
+            debug_info['error_details'] = error_details
+            debug_info['steps'].append({'step': f'Error: {str(e)}'})
+            
+            # Try to remove the temporary file if it exists
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    debug_info['steps'].append({'step': 'Temporary file removed after error'})
+            except:
+                pass
+        
+        return jsonify(debug_info)
+    
+    return jsonify({'error': 'Invalid file type'})
+
+
 
 @app.route('/reset_skills')
 @login_required
@@ -354,6 +553,162 @@ def reset_skills():
         session.pop('resume_skills')
         flash('Resume skills have been cleared.', 'info')
     return redirect(url_for('index'))
+
+@app.route('/enter_location', methods=['GET', 'POST'])
+@login_required
+def enter_location():
+    """Page to manually enter location if not found in resume"""
+    if request.method == 'POST':
+        location = request.form.get('location', '')
+        session['resume_location'] = location
+        return redirect(url_for('jobs_list', query='all', location=location, run_scraper=True))
+    
+    return render_template('enter_location.html')
+@app.route('/debug_skills', methods=['GET', 'POST'])
+def debug_skills():
+    """Debug route for testing skill extraction"""
+    if request.method == 'POST':
+        if 'resume' not in request.files:
+            return jsonify({'error': 'No file part'})
+        
+        file = request.files['resume']
+        
+        if file.filename == '':
+            return jsonify({'error': 'No selected file'})
+        
+        if file and allowed_file(file.filename):
+            # Save the file temporarily
+            filename = secure_filename(file.filename)
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            
+            # Create the upload folder if it doesn't exist
+            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+            
+            file.save(file_path)
+            print(f"Resume saved temporarily at: {file_path}")
+            
+            try:
+                # Load spaCy model
+                print("Loading spaCy model...")
+                nlp = spacy.load("en_core_web_sm")
+                
+                # Extract text from the resume
+                print("Extracting text from file...")
+                file_extension = os.path.splitext(filename)[1].lower()
+                
+                if file_extension == '.pdf':
+                    text = extract_text_from_pdf(file_path)
+                elif file_extension == '.docx':
+                    text = extract_text_from_docx(file_path)
+                elif file_extension == '.txt':
+                    text = extract_text_from_txt(file_path)
+                else:
+                    return jsonify({'error': 'Unsupported file format'})
+                
+                print(f"Extracted text length: {len(text)}")
+                
+                if not text:
+                    return jsonify({'error': 'Could not extract text from the resume'})
+                
+                # Extract skills from the text
+                print("Extracting skills...")
+                skills = extract_skills_from_text(text, nlp)
+                
+                # Extract location from the text
+                print("Extracting location...")
+                location = extract_location_from_text(text, nlp)
+                
+                return jsonify({
+                    'success': True,
+                    'text_length': len(text),
+                    'text_preview': text[:500] + '...' if len(text) > 500 else text,
+                    'skills': skills,
+                    'skills_count': len(skills),
+                    'location': location
+                })
+            except Exception as e:
+                return jsonify({'error': f'Error processing resume: {str(e)}'})
+            finally:
+                # Remove the temporary file
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    print(f"Temporary file removed: {file_path}")
+        else:
+            return jsonify({'error': 'Invalid file format. Please upload a PDF, DOCX, or TXT file.'})
+    
+    # If GET request, show the upload form
+    return '''
+    <!doctype html>
+    <html>
+    <head>
+        <title>Debug Skills Extraction</title>
+        <style>
+            body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+            h1 { color: #333; }
+            form { margin-bottom: 20px; }
+            #result { white-space: pre-wrap; background: #f5f5f5; padding: 15px; border-radius: 5px; }
+            .skills-list { display: flex; flex-wrap: wrap; }
+            .skill { background: #e0f7fa; padding: 5px 10px; margin: 5px; border-radius: 15px; }
+        </style>
+    </head>
+    <body>
+        <h1>Debug Skills Extraction</h1>
+        <form id="upload-form" enctype="multipart/form-data">
+            <input type="file" name="resume" accept=".pdf,.docx,.txt">
+            <button type="submit">Upload and Extract Skills</button>
+        </form>
+        <div id="result"></div>
+        
+        <script>
+            document.getElementById('upload-form').addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const form = new FormData(this);
+                const resultDiv = document.getElementById('result');
+                
+                resultDiv.innerHTML = 'Processing...';
+                
+                fetch('/debug_skills', {
+                    method: 'POST',
+                    body: form
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        resultDiv.innerHTML = `<h2>Error</h2><p>${data.error}</p>`;
+                    } else {
+                        let skillsHtml = '';
+                        if (data.skills && data.skills.length > 0) {
+                            skillsHtml = '<div class="skills-list">';
+                            data.skills.forEach(skill => {
+                                skillsHtml += `<div class="skill">${skill}</div>`;
+                            });
+                            skillsHtml += '</div>';
+                        } else {
+                            skillsHtml = '<p>No skills extracted</p>';
+                        }
+                        
+                        resultDiv.innerHTML = `
+                            <h2>Results</h2>
+                            <p><strong>Text Length:</strong> ${data.text_length} characters</p>
+                            <p><strong>Text Preview:</strong></p>
+                            <div style="max-height: 200px; overflow-y: auto; margin-bottom: 20px;">
+                                ${data.text_preview}
+                            </div>
+                            <p><strong>Location:</strong> ${data.location || 'Not found'}</p>
+                            <p><strong>Skills (${data.skills_count}):</strong></p>
+                            ${skillsHtml}
+                        `;
+                    }
+                })
+                .catch(error => {
+                    resultDiv.innerHTML = `<h2>Error</h2><p>${error.message}</p>`;
+                });
+            });
+        </script>
+    </body>
+    </html>
+    '''
 
 if __name__ == '__main__':
     with app.app_context():
