@@ -70,6 +70,20 @@ SKILL_STOPWORDS = {
     'part', 'better', 'best', 'lot', 'need', 'high', 'low'
 }
 
+# Common technical context indicators to help identify skills
+TECH_CONTEXT_WORDS = {
+    'programming', 'coding', 'development', 'software', 'engineering', 'framework',
+    'library', 'platform', 'stack', 'database', 'system', 'architecture', 'api',
+    'backend', 'frontend', 'fullstack', 'devops', 'cloud', 'server', 'client',
+    'web', 'mobile', 'desktop', 'algorithm', 'data structure', 'infrastructure'
+}
+
+# Function to check if text has technical context
+def has_technical_context(text_before, text_after):
+    """Check if the surrounding text indicates a technical context"""
+    context = (text_before + ' ' + text_after).lower()
+    return any(word in context for word in TECH_CONTEXT_WORDS)
+
 def load_spacy_model(model_name="en_core_web_sm"):
     """
     Load the specified spaCy language model and return both the model and skill keywords.
@@ -115,8 +129,6 @@ def extract_skills_from_text(text, nlp):
     
     # Load skills data from the embedded JSON
     skills_data = json.loads(SKILLS_JSON)
-    
-    # Get the technical skills list
     all_skills = skills_data["skills"]
     
     # Create phrase patterns for multi-word skills
@@ -142,83 +154,80 @@ def extract_skills_from_text(text, nlp):
     # Process the document with spaCy
     doc = nlp(text.lower())
     
-    # Find all skill matches using the matcher for multi-word skills
+    # Find all skill matches
     matches = matcher(doc)
     matched_skills = set()
     
-    # Extract multi-word skills
+    # Extract multi-word skills with context validation
     for match_id, start, end in matches:
         span = doc[start:end]
         skill_text = span.text.lower()
-        if skill_text not in SKILL_STOPWORDS:
+        
+        if skill_text in SKILL_STOPWORDS:
+            continue
+            
+        # Get context before and after
+        text_before = ' '.join(token.text for token in doc[max(0, start-5):start])
+        text_after = ' '.join(token.text for token in doc[end:min(len(doc), end+5)])
+        
+        if has_technical_context(text_before, text_after):
             matched_skills.add(skill_text)
     
     # Extract single-word skills
-    for token in doc:
+    for i, token in enumerate(doc):
         token_text = token.text.lower()
         
-        # Skip punctuation, stop words, etc.
         if (token.is_punct or token.is_stop or token.is_space or 
             len(token_text) < 2 or token_text in SKILL_STOPWORDS):
             continue
-            
-        # Check if the token is in our skills list
+        
         if token_text in single_word_skills:
-            # For very common terms that could be ambiguous, check context
-            if token_text in ['c', 'r', 'go', 'js', 'us']:
-                # Check if it appears to be a programming language from context
-                prev_tokens = [doc[i].text.lower() for i in range(max(0, token.i-3), token.i)]
-                next_tokens = [doc[i].text.lower() for i in range(token.i+1, min(len(doc), token.i+4))]
-                context = ' '.join(prev_tokens + [token_text] + next_tokens)
-                
-                programming_indicators = [
-                    'code', 'coding', 'program', 'programming', 'language', 'development',
-                    'developer', 'script', 'scripting', 'software', 'application'
-                ]
-                
-                if not any(indicator in context for indicator in programming_indicators):
-                    continue
-                
-            matched_skills.add(token_text)
+            # Get context for validation
+            text_before = ' '.join(t.text for t in doc[max(0, i-5):i])
+            text_after = ' '.join(t.text for t in doc[i+1:min(len(doc), i+6)])
+            
+            # Special handling for common ambiguous terms
+            if token_text in {'c', 'r', 'go', 'js', 'ui', 'ux', 'qa'}:
+                if has_technical_context(text_before, text_after):
+                    matched_skills.add(token_text)
+            else:
+                matched_skills.add(token_text)
     
     # Additional pattern matching for skill extraction
-    # 1. Programming language patterns
-    prog_pattern = re.compile(r'\b(programming|coding|developing)\s+(in|with)\s+([A-Za-z\+\#]+)', re.IGNORECASE)
-    for match in prog_pattern.finditer(text.lower()):
-        skill = match.group(3).lower()
-        if skill in single_word_skills and skill not in SKILL_STOPWORDS:
-            matched_skills.add(skill)
-    
-    # 2. Technology/tool usage patterns
-    tool_pattern = re.compile(r'\b(using|with|experience\s+in)\s+([A-Za-z\+\#]+)', re.IGNORECASE)
-    for match in tool_pattern.finditer(text.lower()):
-        skill = match.group(2).lower()
-        if skill in single_word_skills and skill not in SKILL_STOPWORDS:
-            matched_skills.add(skill)
-    
-    # 3. Additional patterns to extract tech terms based on common formats
-    tech_patterns = [
-        r'\b([A-Z][a-z]*[A-Z][a-zA-Z]*)\b',  # CamelCase (like JavaScript, TypeScript)
-        r'\b([A-Z][a-z]+)\.(js|ts|py|java|rb)\b',  # Framework.js patterns (like React.js, Vue.js)
-        r'\b([A-Z]{2,})\b'  # Acronyms (like HTML, CSS, AWS)
+    patterns = [
+        # Programming language patterns
+        r'\b(programming|coding|developing)\s+(in|with)\s+([A-Za-z\+\#\.]+)',
+        # Technology/tool patterns
+        r'\b(using|with|in)\s+([A-Za-z\+\#\.]+)\s+(framework|library|platform|stack)',
+        # Version control and tools
+        r'\b(git|svn|mercurial)(?:\s+version\s+control)?\b',
+        # Cloud platforms
+        r'\b(aws|azure|gcp|cloud)\s+(?:platform|services?|computing)\b',
+        # Frameworks and tools with versions
+        r'\b([A-Za-z]+(?:\.[js|ts])?)\s+(?:v?[\d\.]+)\b',
+        # Containerization and deployment
+        r'\b(docker|kubernetes|k8s|jenkins|ci/cd)\b',
+        # Database systems
+        r'\b(sql|nosql|mongodb|postgresql|mysql|oracle|redis)\b',
+        # Web technologies
+        r'\b(html5?|css3?|sass|less|webpack|babel|node(?:\.js)?)\b'
     ]
     
-    for pattern in tech_patterns:
-        matches = re.finditer(pattern, text)
+    for pattern in patterns:
+        matches = re.finditer(pattern, text.lower(), re.IGNORECASE)
         for match in matches:
-            potential_skill = match.group(0).lower()
-            # Verify it's a known skill or a common tech term
-            if (potential_skill in single_word_skills or 
-                any(tech_term in potential_skill for tech_term in ['js', 'api', 'sdk', 'ui', 'ux'])):
-                matched_skills.add(potential_skill)
+            # Get the last group if it exists, otherwise use the first match
+            skill = match.group(match.lastindex if match.lastindex else 0).lower()
+            if skill in single_word_skills and skill not in SKILL_STOPWORDS:
+                matched_skills.add(skill)
     
-    # Normalize and clean up the matched skills
+    # Normalize the skills
     normalized_skills = []
     for skill in matched_skills:
         # Handle special cases for proper capitalization
-        if skill.lower() in ['html', 'css', 'php', 'sql', 'aws', 'gcp', 'api', 'json', 'xml', 'ci/cd']:
+        if skill.lower() in ['html', 'css', 'php', 'sql', 'aws', 'gcp', 'api', 'json', 'xml', 'ci/cd', 'qa']:
             normalized_skills.append(skill.upper())
-        elif skill.lower() in ['javascript', 'typescript', 'python', 'java', 'nodejs', 'react', 'angular']:
+        elif skill.lower() in ['javascript', 'typescript', 'python', 'java', 'nodejs', 'react', 'angular', 'vue']:
             normalized_skills.append(skill.capitalize())
         else:
             normalized_skills.append(skill)
@@ -242,7 +251,29 @@ def extract_location_from_text(text, nlp):
     # Process the document
     doc = nlp(text)
     
-    # First try to find location entities
+    # First try to find location patterns
+    location_patterns = [
+        r'(?i)Location\s*:\s*([A-Za-z\s,]+)',
+        r'(?i)Address\s*:\s*([^,]+,\s*[A-Za-z\s]+)',
+        r'(?i)(?:Based in|Located in|Living in)\s+([A-Za-z\s,]+)',
+        r'(?i)([A-Za-z\s]+),\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\s*\d{5}?',
+        r'(?i)City\s*:\s*([A-Za-z\s,]+)',
+        r'(?i)based in\s+([A-Za-z\s,]+)',
+        r'(?i)located in\s+([A-Za-z\s,]+)',
+        r'(?i)(remote|work from home|wfh)'
+    ]
+    
+    for pattern in location_patterns:
+        match = re.search(pattern, text)
+        if match:
+            if len(match.groups()) > 0:
+                location = match.group(1).strip()
+                if location:
+                    return location
+            elif "remote" in match.group(0).lower():
+                return "Remote"
+    
+    # Then try to find location entities using spaCy
     locations = []
     for ent in doc.ents:
         if ent.label_ in ["GPE", "LOC"]:
@@ -254,26 +285,16 @@ def extract_location_from_text(text, nlp):
         location_counts = Counter(locations)
         return location_counts.most_common(1)[0][0]
     
-    # If no entities found, look for common location patterns
-    location_patterns = [
-        r'(?i)Location\s*:\s*([A-Za-z\s,]+)',
-        r'(?i)City\s*:\s*([A-Za-z\s,]+)',
-        r'(?i)Address\s*:\s*([^,\n]+,[^,\n]+)',
-        r'(?i)based in\s+([A-Za-z\s,]+)',
-                r'(?i)based in\s+([A-Za-z\s,]+)',
-        r'(?i)located in\s+([A-Za-z\s,]+)',
-        r'(?i)(remote|work from home|wfh)',
+    # If still no location found, look for addresses
+    address_patterns = [
+        r'\b\d+\s+[A-Za-z\s]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr)\b[^,]*,\s*([A-Za-z\s]+)',
+        r'[A-Za-z\s]+,\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)'
     ]
     
-    for pattern in location_patterns:
-        matches = re.search(pattern, text)
-        if matches:
-            if len(matches.groups()) > 0:
-                location = matches.group(1).strip()
-                if location:
-                    return location
-            elif "remote" in matches.group(0).lower():
-                return "Remote"
+    for pattern in address_patterns:
+        match = re.search(pattern, text)
+        if match and match.groups():
+            return match.group(1).strip()
     
     return ""
 

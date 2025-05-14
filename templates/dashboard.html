@@ -1,8 +1,139 @@
 {% extends "base.html" %}
-
+{% block title %}Dashboard - Job Recommender{% endblock %}
 {% block content %}
-    <h2>Dashboard</h2>
-    <p>Welcome to your dashboard, {{ current_user.username }}!</p>
-    <p>This page is only accessible to logged-in users.</p>
-    <p>Your email: {{ current_user.email }}</p>
+<div class="container-fluid">
+    <div class="row">
+        <!-- Sidebar -->
+        <nav id="sidebar" class="col-md-3 col-lg-2 d-md-block bg-light sidebar">
+            <div class="position-sticky pt-3">
+                <ul class="nav flex-column">
+                    <li class="nav-item">
+                        <a class="nav-link {{ 'active' if active_page == 'dashboard' }}" href="{{ url_for('dashboard') }}">
+                            <i class="bi bi-speedometer2 me-2"></i>
+                            Dashboard
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {{ 'active' if active_page == 'profile' }}" href="{{ url_for('profile') }}">
+                            <i class="bi bi-person me-2"></i>
+                            Profile
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {{ 'active' if active_page == 'jobs' }}" href="{{ url_for('list_all_jobs') }}">
+                            <i class="bi bi-briefcase me-2"></i>
+                            Jobs
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {{ 'active' if active_page == 'course_recommendations' }}" href="{{ url_for('course_recommendations') }}">
+                            <i class="bi bi-mortarboard me-2"></i>
+                            Course Recommendations
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </nav>
+
+        <!-- Main content -->
+        <main class="col-md-9 ms-sm-auto col-lg-10 px-md-4">
+            <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+                <h1 class="h2">Welcome, {{ current_user.username }}!</h1>
+            </div>
+
+            <!-- Quick Stats Cards -->
+            <div class="row mb-4">
+                <div class="col-md-3">
+                    <div class="card bg-primary text-white">
+                        <div class="card-body">
+                            <h5 class="card-title">Profile Match</h5>
+                            <p class="card-text display-6">{{ profile_completion }}%</p>
+                            <small>Profile completion rate</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card bg-success text-white">
+                        <div class="card-body">
+                            <h5 class="card-title">Matching Jobs</h5>
+                            <p class="card-text display-6">{{ matching_jobs_count }}</p>
+                            <small>Jobs matching your skills</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card bg-info text-white">
+                        <div class="card-body">
+                            <h5 class="card-title">Your Skills</h5>
+                            <p class="card-text display-6">{{ user_skills_count }}</p>
+                            <small>Total skills in your profile</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card bg-warning text-white">
+                        <div class="card-body">
+                            <h5 class="card-title">Skill Gaps</h5>
+                            <p class="card-text display-6">{{ missing_skills_count }}</p>
+                            <small>Skills to improve</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Job Matches -->
+            <div class="row mb-4">
+                <div class="col-md-8">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0">Recent Job Matches</h5>
+                        </div>
+                        <div class="card-body">
+                            {% if recent_jobs %}
+                                {% for job in recent_jobs %}
+                                <div class="mb-3">
+                                    <h6 class="mb-1">{{ job.title }}</h6>
+                                    <p class="small text-muted mb-1">{{ job.company }} • {{ job.location }}</p>
+                                    <div class="progress" style="height: 10px;">
+                                        <div class="progress-bar" role="progressbar" style="width: {{ job.match_percentage }}%">
+                                            {{ job.match_percentage }}% Match
+                                        </div>
+                                    </div>
+                                </div>
+                                {% if not loop.last %}<hr>{% endif %}
+                                {% endfor %}
+                            {% else %}
+                                <p class="text-muted">No recent job matches found.</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <!-- Skill Recommendations -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0">Recommended Skills</h5>
+                        </div>
+                        <div class="card-body">
+                            {% if missing_skills %}
+                                <div class="d-flex flex-wrap gap-2">
+                                {% for skill in missing_skills[:5] %}
+                                    <span class="badge bg-warning text-dark">{{ skill }}</span>
+                                {% endfor %}
+                                </div>
+                                <div class="mt-3">
+                                    <a href="{{ url_for('course_recommendations') }}" class="btn btn-outline-primary btn-sm">
+                                        View Courses <i class="bi bi-arrow-right ms-1"></i>
+                                    </a>
+                                </div>
+                            {% else %}
+                                <p class="text-muted">No skill gaps identified.</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
 {% endblock %}

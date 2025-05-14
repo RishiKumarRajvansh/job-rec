@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2 class="mb-4"><i class="bi bi-mortarboard me-2"></i>Course Recommendations</h2>
+
+    <div class="row">
+        <div class="col-md-4">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-person-check me-2"></i>Your Skills</h5>
+                </div>
+                <div class="card-body">
+                    {% if user_skills %}
+                        <div class="d-flex flex-wrap gap-2">
+                            {% for skill in user_skills %}
+                                <span class="badge bg-success">{{ skill }}</span>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <p class="text-muted">No skills found. Try uploading your resume or updating your profile.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if missing_skills %}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-clipboard-plus me-2"></i>Skills to Learn</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex flex-wrap gap-2">
+                        {% for skill in missing_skills %}
+                            <span class="badge bg-warning text-dark">{{ skill }}</span>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="col-md-8">
+            {% if missing_skills and course_recommendations %}
+            <div class="course-recommendations">
+                {% for skill, courses in course_recommendations.items() %}
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0">
+                            <span class="badge bg-secondary me-2">{{ skill }}</span>
+                            Recommended Courses
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            {% for course in courses %}
+                            <div class="col-md-6 mb-3">
+                                <div class="card h-100">
+                                    {% if course.image %}
+                                    <img src="{{ course.image }}" class="card-img-top" alt="{{ course.name }}" style="height: 150px; object-fit: cover;">
+                                    {% endif %}
+                                    <div class="card-body">
+                                        <h6 class="card-title">{{ course.name }}</h6>
+                                        <p class="card-text small">{{ course.description }}</p>
+                                    </div>
+                                    <div class="card-footer bg-transparent">
+                                        <a href="{{ course.link }}" target="_blank" class="btn btn-primary btn-sm d-block">
+                                            <i class="bi bi-box-arrow-up-right me-1"></i>Learn More
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% elif not missing_skills %}
+            <div class="alert alert-success">
+                <i class="bi bi-check-circle-fill me-2"></i>Great job! You have all the skills currently in demand.
+            </div>
+            {% else %}
+            <div class="alert alert-info">
+                <i class="bi bi-info-circle-fill me-2"></i>No course recommendations available at the moment. Try browsing jobs to get personalized recommendations.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

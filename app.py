@@ -1,68 +1,94 @@
-from flask import Flask, render_template, url_for, flash, redirect, request, session, jsonify
-from flask_sqlalchemy import SQLAlchemy
-from flask_bcrypt import Bcrypt
-from flask_login import LoginManager, UserMixin, login_user, current_user, logout_user, login_required
-from datetime import datetime
 import os
+import sys
+import re
+import traceback
+from datetime import datetime
+from flask import Flask, request, jsonify, render_template, flash, redirect, url_for, session
+from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
+from flask_login import LoginManager, UserMixin, login_user, current_user, logout_user, login_required
+from werkzeug.utils import secure_filename
+from database_manager import search_jobs_db, initialize_database as init_db, clear_jobs_table
+from courses import fetch_courses_by_skills
+from scraper import scrape_jobs
 import json
 import subprocess
-import sys  # Make sure to import sys
 import time
-import traceback  # Import traceback to resolve the "traceback is not defined" error
+import spacy
+from flask_bcrypt import Bcrypt
 from werkzeug.utils import secure_filename
-import spacy  # Import spacy to resolve the "spacy is not defined" error
-from nlp_utils import extract_skills_from_text
-from database_manager import get_all_jobs, search_jobs_db, clear_jobs_table, init_db
+from werkzeug.exceptions import BadRequest
 from nlp_utils import extract_skills_from_text, extract_location_from_text
+from database_manager import (
+    get_all_jobs,
+    add_work_experience, update_work_experience, delete_work_experience, get_user_work_experience,
+    add_education, update_education, delete_education, get_user_education,
+    update_user_profile, jobs_need_refresh
+)
 from resume_parser import parse_resume, extract_text_from_pdf, extract_text_from_docx, extract_text_from_txt
+from flask_wtf.csrf import CSRFProtect
+from forms import (
+    LoginForm, RegistrationForm, JobSearchForm, ProfileForm,
+    WorkExperienceForm, EducationForm, ResumeUploadForm
+)
+
+# Define constants
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'doc', 'docx'}
+
+# Ensure spaCy and its model are available
+try:
+    import spacy
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "spacy"])
+    import spacy
+
+try:
+    nlp = spacy.load("en_core_web_sm")
+except OSError:
+    subprocess.check_call([sys.executable, "-m", "spacy", "download", "en_core_web_sm"])
+    nlp = spacy.load("en_core_web_sm")
 
 # Initialize Flask app
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key_here'  # Change this to a random secret key
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Initialize CSRF protection
+csrf = CSRFProtect(app)
+
+# Configure database
 basedir = os.path.abspath(os.path.dirname(__file__))
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'instance', 'job_recommender.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'instance/job_recommender.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Set up upload folder for resumes
-UPLOAD_FOLDER = 'uploads'
-ALLOWED_EXTENSIONS = {'txt', 'pdf', 'docx'}
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload size
+# Initialize SQLAlchemy
+from models import db, User  # Import db and User from models.py
+db.init_app(app)
 
-# Ensure upload folder exists
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+# Initialize Flask-Migrate
+migrate = Migrate(app, db)
 
-# Initialize extensions
-db = SQLAlchemy(app)
-bcrypt = Bcrypt(app)
-login_manager = LoginManager(app)
+# Initialize Flask-Login
+login_manager = LoginManager()
+login_manager.init_app(app)
 login_manager.login_view = 'login'
-login_manager.login_message_category = 'info'
 
-# Import forms
-from forms import RegistrationForm, LoginForm, ProfileForm, JobSearchForm
-
-# User model
-class User(db.Model, UserMixin):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(20), unique=True, nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    password = db.Column(db.String(60), nullable=False)
-    skills = db.Column(db.Text, nullable=True)
-    experience_summary = db.Column(db.Text, nullable=True)
-    education_summary = db.Column(db.Text, nullable=True)
-    def __repr__(self):
-        return f"User('{self.username}', '{self.email}')"
+# Initialize Flask-Bcrypt
+bcrypt = Bcrypt(app)
 
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# Import database functions
-from database_manager import get_all_jobs, search_jobs_db, get_job_by_id, clear_jobs_table
+# Create upload folder if it doesn't exist
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Functions to ensure spaCy is installed and model is downloaded
+def allowed_file(filename):
+    """Check if file extension is allowed"""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
 def ensure_spacy_installed():
     """Ensure spaCy is installed."""
     try:
@@ -74,7 +100,7 @@ def ensure_spacy_installed():
         try:
             result = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "spacy"],
-                capture_output=True,
+                capture_output=True, 
                 text=True,
                 check=False
             )
@@ -135,8 +161,6 @@ def ensure_model_downloaded(model_name='en_core_web_sm'):
         print("Cannot download model because spaCy is not installed.")
         return False
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def run_scraper(query="All", location="All"):
     """
@@ -149,6 +173,7 @@ def run_scraper(query="All", location="All"):
     Returns:
         bool: True if successful, False otherwise
     """
+    print(f"Starting job scraper with query='{query}', location='{location}'")
     try:
         print(f"Running scraper with query='{query}', location='{location}'")
         
@@ -160,20 +185,10 @@ def run_scraper(query="All", location="All"):
         ensure_spacy_installed()
         
         # Prepare and run the scraper process
-        scraper_command = [sys.executable, "scraper.py"]
-        
-        # Always pass the arguments, the scraper will handle "All" values internally
-        scraper_command.extend(["--query", query])
-        scraper_command.extend(["--location", location])
-        
+        scraper_command = [sys.executable, "scraper.py", "--query", query, "--location", location]
         print(f"Running scraper with command: {' '.join(scraper_command)}")
         
-        result = subprocess.run(
-            scraper_command,
-            capture_output=True,
-            text=True
-        )
-        
+        result = subprocess.run(scraper_command, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"Scraper failed with error: {result.stderr}")
             return False
@@ -188,13 +203,53 @@ def run_scraper(query="All", location="All"):
         return False
 
 
+def jobs_need_refresh():
+    """Check if jobs need to be refreshed based on time elapsed."""
+    # Get the last scrape time from the session
+    last_scrape = session.get('last_scrape_time')
+    if not last_scrape:
+        return True
+    
+    try:
+        elapsed = (datetime.utcnow() - datetime.fromisoformat(last_scrape)).total_seconds()
+        # Only refresh if it's been more than 6 hours
+        return elapsed > 21600  # 6 hours
+    except:
+        return True
+
+
+# Add template filters
+@app.template_filter('from_json')
+def from_json_filter(value):
+    """Convert a JSON string to Python object."""
+    if not value:
+        return []
+    try:
+        if isinstance(value, str):
+            # If it looks like a JSON array or object
+            if value.startswith('[') or value.startswith('{'):
+                return json.loads(value)
+            # If it's just a comma-separated string
+            return [s.strip() for s in value.split(',') if s.strip()]
+        return value if isinstance(value, (list, tuple)) else []
+    except (json.JSONDecodeError, AttributeError):
+        # If it's not JSON and not a string, return empty list
+        return []
+
+
+@app.template_filter('nl2br')
+def nl2br(value):
+    """Convert newlines to HTML line breaks."""
+    if not value:
+        return value
+    return value.replace('\n', '<br>')
+
 
 @app.route('/')
 def index():
-    form = JobSearchForm()
     resume_skills = session.get('resume_skills', [])
-    current_year = datetime.now().year
-    return render_template('index.html', form=form, resume_skills=resume_skills, current_year=current_year)
+    return render_template('index.html', resume_skills=resume_skills)
+
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -209,6 +264,7 @@ def register():
         flash('Your account has been created! You are now able to log in', 'success')
         return redirect(url_for('login'))
     return render_template('register.html', title='Register', form=form, current_year=datetime.now().year)
+
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -225,492 +281,689 @@ def login():
             flash('Login Unsuccessful. Please check email and password', 'danger')
     return render_template('login.html', title='Login', form=form, current_year=datetime.now().year)
 
+
 @app.route('/logout')
 def logout():
     logout_user()
     return redirect(url_for('index'))
 
-@app.route('/profile', methods=['GET', 'POST'])
+
+@app.route("/profile", methods=['GET', 'POST'])
 @login_required
 def profile():
     form = ProfileForm()
+    
     if form.validate_on_submit():
-        current_user.username = form.username.data
-        current_user.email = form.email.data
-        current_user.skills = form.skills.data
-        current_user.experience_summary = form.experience_summary.data
-        current_user.education_summary = form.education_summary.data
-        db.session.commit()
-        flash('Your profile has been updated!', 'success')
-        return redirect(url_for('profile'))
-    elif request.method == 'GET':
-        form.username.data = current_user.username
-        form.email.data = current_user.email
-        form.skills.data = current_user.skills
-        form.experience_summary.data = current_user.experience_summary
-        form.education_summary.data = current_user.education_summary
-    return render_template('profile.html', title='Profile', form=form, current_year=datetime.now().year)
+        # Check for changes and only update fields that have changed
+        updates = {}
+        if form.username.data != current_user.username:
+            # Check if new username is already taken
+            existing_user = User.query.filter_by(username=form.username.data).first()
+            if existing_user and existing_user.id != current_user.id:
+                flash('Username already taken.', 'danger')
+                return redirect(url_for('profile'))
+            updates['username'] = form.username.data
 
-@app.route('/jobs')
-@login_required
-def list_all_jobs():
-    # Don't show any flash messages here - we'll handle them in the template
-    resume_skills = session.get('resume_skills', [])
-    
-    # Render the template with a flag to indicate we need to run the scraper
-    return render_template('jobs_list.html',
-                           jobs=[],
-                           query="All",
-                           location="All",
-                          resume_skills=resume_skills,
-                           current_year=datetime.now().year,
-                          run_scraper=True)  # Flag to trigger scraping in the template
+        if form.email.data != current_user.email:
+            # Check if new email is already taken
+            existing_user = User.query.filter_by(email=form.email.data).first()
+            if existing_user and existing_user.id != current_user.id:
+                flash('Email already registered.', 'danger')
+                return redirect(url_for('profile'))
+            updates['email'] = form.email.data
 
-@app.route('/run_scraper_api', methods=['POST'])
-@login_required
-def run_scraper_api():
-    """API endpoint to run the scraper and return results"""
-    try:
-        query = request.form.get('query', 'all')
-        location = request.form.get('location', 'all')
-        
-        # Get resume skills
-        resume_skills = session.get('resume_skills', [])
-        
-        # If query is "All" and we have resume skills, use top skills for the query
-        if (query.lower() == 'all' or not query) and resume_skills:
-            # Use top 3 skills for the query
-            query = " ".join(resume_skills[:3])
-            print(f"Using resume skills for query: {query}")
-        
-        # Initialize database and ensure tables exist
-        from database_manager import init_db, clear_jobs_table, get_all_jobs
-        init_db()
-        clear_jobs_table()
-        
-        # Run the scraper with the modified query
-        if not run_scraper(query, location):
-            return jsonify({
-                'status': 'error',
-                'message': 'Failed to run job scraper. Please try again.'
-            }), 500
-        
-        # Get all jobs from the database
-        jobs = get_all_jobs()
-        
-        # If no jobs found after scraping
-        if not jobs:
-            return jsonify({
-                'status': 'success', 
-                'message': 'No jobs found.',
-                'jobs': []
-            })
-        
-        # Compare job skills with resume skills
-        for job in jobs:
-            job_skills = job.get('skills', [])
-            if job_skills and resume_skills:
-                matching_skills = set(s.lower() for s in job_skills) & set(s.lower() for s in resume_skills)
-                job['matching_skills'] = list(matching_skills)
-                job['skill_match_percentage'] = int(len(matching_skills) / len(resume_skills) * 100) if resume_skills else 0
-            else:
-                job['matching_skills'] = []
-                job['skill_match_percentage'] = 0
-        
-        # Sort jobs by skill match percentage
-        jobs = sorted(jobs, key=lambda x: x.get('skill_match_percentage', 0), reverse=True)
-        
-        total_jobs = len(jobs)
-        print(f"Found {total_jobs} jobs matching the criteria")
-        if total_jobs > 0:
-            print(f"First job: {jobs[0].get('title')} at {jobs[0].get('company')}")
-        
-        return jsonify({
-            'status': 'success',
-            'message': f'Found {total_jobs} jobs matching your criteria.',
-            'jobs': jobs
-        })
-    
-    except Exception as e:
-        print(f"Error in run_scraper_api: {str(e)}")
-        traceback.print_exc()
-        return jsonify({
-            'status': 'error',
-            'message': f'An error occurred: {str(e)}'
-        }), 500
+        # For non-unique fields, update if they've changed
+        if form.skills.data != current_user.skills:
+            updates['skills'] = form.skills.data
+        if form.location.data != current_user.location:
+            updates['location'] = form.location.data
+        if form.certifications.data != current_user.certifications:
+            updates['certifications'] = form.certifications.data
+        if form.summary.data != current_user.summary:
+            updates['summary'] = form.summary.data
 
+        # Track if we need to trigger a scrape
+        need_scrape = False
 
-# @app.route('/search', methods=['POST'])
-# @login_required
-# def search():
-#     form = JobSearchForm()
-#     if form.validate_on_submit():
-#         query = form.query.data
-#         location = form.location.data
-#         resume_skills = session.get('resume_skills', [])
-        
-#         # Render the template with a flag to indicate we need to run the scraper
-#         return render_template('jobs_list.html',
-#                                jobs=[],
-#                                query=query,
-#                                location=location,
-#                               resume_skills=resume_skills,
-#                                current_year=datetime.now().year,
-#                               run_scraper=True)  # Flag to trigger scraping in the template
-    
-#     return redirect(url_for('index'))
-@app.route('/search', methods=['POST'])
-@login_required
-def search():
-    form = JobSearchForm()
-    if form.validate_on_submit():
-        query = form.query.data
-        location = form.location.data
-        
-        # Use resume location if available and no specific location is provided
-        if location.lower() == 'all' and 'resume_location' in session and session['resume_location']:
-            location = session['resume_location']
-            flash(f"Using location from your resume: {location}", "info")
-        
-        # Use resume skills for the query if no specific query is provided
-        resume_skills = session.get('resume_skills', [])
-        if query.lower() == 'all' and resume_skills:
-            # Use the first few skills as the query
-            query = " ".join(resume_skills[:3])
-            flash(f"Using skills from your resume for search: {query}", "info")
-        
-        # Render the template with a flag to indicate we need to run the scraper
-        return render_template('jobs_list.html',
-                              jobs=[],
-                              query=query,
-                              location=location,
-                              resume_skills=resume_skills,
-                              current_year=datetime.now().year,
-                              run_scraper=True)  # Flag to trigger scraping in the template
-    
-    return redirect(url_for('index'))
-
-
-@app.route('/upload_resume', methods=['GET', 'POST'])
-@login_required
-def upload_resume():
-    """Upload and process a resume file"""
-    if request.method == 'POST':
-        if 'resume' not in request.files:
-            flash('No file part', 'error')
-            return redirect(request.referrer or url_for('index'))
-            
-        file = request.files['resume']
-        if file.filename == '':
-            flash('No selected file', 'error')
-            return redirect(request.referrer or url_for('index'))
-            
-        if file and allowed_file(file.filename):
+        # Only update if there are actual changes
+        if updates:
             try:
-                # Save the file temporarily
-                filename = secure_filename(file.filename)
-                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-                os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-                file.save(file_path)
+                # Update SQLAlchemy model
+                if 'username' in updates:
+                    current_user.username = updates['username']
+                if 'email' in updates:
+                    current_user.email = updates['email']
+                if 'skills' in updates:
+                    current_user.skills = updates['skills']
+                    need_scrape = True  # Skills changed, need to refresh jobs
+                if 'location' in updates:
+                    current_user.location = updates['location']
+                    need_scrape = True  # Location changed, need to refresh jobs
+                if 'certifications' in updates:
+                    current_user.certifications = updates['certifications']
+                if 'summary' in updates:
+                    current_user.summary = updates['summary']
                 
-                # Load NLP model
-                nlp = spacy.load("en_core_web_sm")
+                # Commit SQLAlchemy changes
+                db.session.commit()
                 
-                # Extract text based on file type
-                file_extension = os.path.splitext(filename)[1].lower()
-                if file_extension == '.pdf':
-                    text = extract_text_from_pdf(file_path)
-                elif file_extension == '.docx':
-                    text = extract_text_from_docx(file_path)
-                elif file_extension == '.txt':
-                    text = extract_text_from_txt(file_path)
-                else:
-                    raise ValueError('Unsupported file format')
+                flash('Your profile has been updated!', 'success')
+                if need_scrape:
+                    # Trigger a scrape with the new skills/location
+                    user_skills = [s.strip() for s in current_user.skills.split(',')] if current_user.skills else []
+                    session['resume_skills'] = user_skills
+                    session.pop('last_scrape_time', None)  # Force a fresh scrape
+                    return redirect(url_for('list_all_jobs', run_scraper='true'))
                 
-                # Process the text
-                skills = extract_skills_from_text(text, nlp)
-                location = extract_location_from_text(text, nlp)
-                
-                # Store in session
-                session['resume_skills'] = skills
-                session['resume_location'] = location
-                
-                flash('Resume processed successfully', 'success')
-                return redirect(url_for('index'))
+                return redirect(url_for('profile'))
                 
             except Exception as e:
-                flash(f'Error processing resume: {str(e)}', 'error')
-            finally:
-                # Clean up temporary file
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-        else:
-            flash('Invalid file format. Please upload a PDF, DOCX, or TXT file.', 'error')
+                db.session.rollback()
+                flash(f'Error updating profile: {str(e)}', 'danger')
+                return redirect(url_for('profile'))
+        return redirect(url_for('profile'))
+        
+    elif request.method == 'GET':
+        # Populate form with current user data
+        form.username.data = current_user.username
+        form.email.data = current_user.email
+        form.location.data = current_user.location
+        form.skills.data = current_user.skills
+        form.certifications.data = current_user.certifications
+        form.summary.data = current_user.summary
+
+    # Get resume skills if they exist
+    resume_skills = session.get('resume_skills', [])
     
-    return render_template('upload_resume.html', current_year=datetime.now().year)
+    return render_template('profile.html',
+                         form=form,
+                         resume_skills=resume_skills)
 
 
-
-@app.route('/debug_resume_parser', methods=['GET', 'POST'])
+@app.route("/add_experience", methods=['POST'])
 @login_required
-def debug_resume_parser():
-    """Debug route to test resume parsing directly"""
-    if request.method == 'GET':
-        return render_template('debug_resume.html', current_year=datetime.now().year)
-    
-    if 'resume' not in request.files:
-        return jsonify({'error': 'No file part'})
-    
-    file = request.files['resume']
-    
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'})
-    
-    if file and allowed_file(file.filename):
-        # Save the file temporarily
-        filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(file_path)
+def add_experience():
+    form = WorkExperienceForm()
+    if form.validate_on_submit():
+        start_date = datetime.strptime(form.start_date.data, '%m/%Y')
+        end_date = None if form.current_job.data else datetime.strptime(form.end_date.data, '%m/%Y')
         
-        debug_info = {
-            'file_path': file_path,
-            'file_size': os.path.getsize(file_path),
-            'file_exists': os.path.exists(file_path),
-            'steps': []
-        }
+        exp_id = add_work_experience(
+            user_id=current_user.id,
+            company=form.company.data,
+            title=form.title.data,
+            start_date=start_date,
+            end_date=end_date,
+            description=form.description.data,
+            current_job=form.current_job.data
+        )
         
-        try:
-            # Step 1: Load NLP model
-            debug_info['steps'].append({'step': 'Loading NLP model'})
-            nlp_model = spacy.load("en_core_web_sm")
-            debug_info['steps'].append({'step': 'NLP model loaded successfully'})
-            
-            # Step 2: Import functions
-            debug_info['steps'].append({'step': 'Importing functions'})
-            from nlp_utils import extract_skills_from_text
-            from resume_parser import parse_resume, extract_text_from_pdf, extract_text_from_docx, extract_text_from_txt
-            debug_info['steps'].append({'step': 'Functions imported successfully'})
-            
-            # Step 3: Extract text based on file extension
-            debug_info['steps'].append({'step': 'Extracting text from file'})
-            file_extension = os.path.splitext(file_path)[1].lower()
-            
-            if file_extension == '.pdf':
-                extracted_text = extract_text_from_pdf(file_path)
-            elif file_extension == '.docx':
-                extracted_text = extract_text_from_docx(file_path)
-            elif file_extension == '.txt':
-                extracted_text = extract_text_from_txt(file_path)
-            else:
-                extracted_text = "Unsupported file format"
-            
-            debug_info['text_length'] = len(extracted_text)
-            debug_info['text_preview'] = extracted_text[:500] + '...' if len(extracted_text) > 500 else extracted_text
-            debug_info['steps'].append({'step': f'Text extracted successfully, length: {len(extracted_text)}'})
-            
-            # Step 4: Extract skills
-            debug_info['steps'].append({'step': 'Extracting skills'})
-            extracted_skills = extract_skills_from_text(extracted_text, nlp_model)
-            debug_info['skills'] = extracted_skills
-            debug_info['steps'].append({'step': f'Skills extracted successfully, count: {len(extracted_skills)}'})
-            
-            # Step 5: Extract location
-            debug_info['steps'].append({'step': 'Extracting location'})
-            from resume_parser import extract_location_from_text
-            extracted_location = extract_location_from_text(extracted_text, nlp_model)
-            debug_info['location'] = extracted_location
-            debug_info['steps'].append({'step': f'Location extracted: {extracted_location}'})
-            
-            # Clean up
-            os.remove(file_path)
-            debug_info['steps'].append({'step': 'Temporary file removed'})
-            
-        except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
-            debug_info['error'] = str(e)
-            debug_info['error_details'] = error_details
-            debug_info['steps'].append({'step': f'Error: {str(e)}'})
-            
-            # Try to remove the temporary file if it exists
-            try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                    debug_info['steps'].append({'step': 'Temporary file removed after error'})
-            except:
-                pass
-        
-        return jsonify(debug_info)
-    
-    return jsonify({'error': 'Invalid file type'})
+        if exp_id:
+            flash('Work experience added successfully!', 'success')
+        else:
+            flash('Error adding work experience.', 'danger')
+    return redirect(url_for('profile'))
 
+
+@app.route("/edit_experience/<int:id>", methods=['POST'])
+@login_required
+def edit_experience(id):
+    form = WorkExperienceForm()
+    if form.validate_on_submit():
+        start_date = datetime.strptime(form.start_date.data, '%m/%Y')
+        end_date = None if form.current_job.data else datetime.strptime(form.end_date.data, '%m/%Y')
+        
+        success = update_work_experience(
+            exp_id=id,
+            user_id=current_user.id,
+            company=form.company.data,
+            title=form.title.data,
+            start_date=start_date,
+            end_date=end_date,
+            description=form.description.data,
+            current_job=form.current_job.data
+        )
+        
+        return jsonify({'success': success})
+    return jsonify({'success': False, 'errors': form.errors}), 400
+
+
+@app.route("/delete_experience/<int:id>", methods=['POST'])
+@login_required
+def delete_experience(id):
+    success = delete_work_experience(id, current_user.id)
+    return jsonify({'success': success})
+
+
+@app.route("/add_education", methods=['POST'])
+@login_required
+def add_education_route():
+    form = EducationForm()
+    if form.validate_on_submit():
+        start_date = datetime.strptime(form.start_date.data, '%m/%Y') if form.start_date.data else None
+        end_date = datetime.strptime(form.end_date.data, '%m/%Y') if form.end_date.data else None
+        gpa = float(form.gpa.data) if form.gpa.data else None
+        
+        edu_id = add_education(
+            user_id=current_user.id,
+            institution=form.institution.data,
+            degree=form.degree.data,
+            field_of_study=form.field_of_study.data,
+            start_date=start_date,
+            end_date=end_date,
+            gpa=gpa,
+            description=form.description.data
+        )
+        
+        if edu_id:
+            flash('Education entry added successfully!', 'success')
+        else:
+            flash('Error adding education entry.', 'danger')
+    return redirect(url_for('profile'))
+
+
+@app.route("/edit_education/<int:id>", methods=['POST'])
+@login_required
+def edit_education(id):
+    form = EducationForm()
+    if form.validate_on_submit():
+        start_date = datetime.strptime(form.start_date.data, '%m/%Y') if form.start_date.data else None
+        end_date = datetime.strptime(form.end_date.data, '%m/%Y') if form.end_date.data else None
+        gpa = float(form.gpa.data) if form.gpa.data else None
+        
+        success = update_education(
+            edu_id=id,
+            user_id=current_user.id,
+            institution=form.institution.data,
+            degree=form.degree.data,
+            field_of_study=form.field_of_study.data,
+            start_date=start_date,
+            end_date=end_date,
+            gpa=gpa,
+            description=form.description.data
+        )
+        
+        return jsonify({'success': success})
+    return jsonify({'success': False, 'errors': form.errors}), 400
+
+
+@app.route("/delete_education/<int:id>", methods=['POST'])
+@login_required
+def delete_education_route(id):
+    success = delete_education(id, current_user.id)
+    return jsonify({'success': success})
+
+
+@app.route('/jobs')
+@app.route('/list_all_jobs')
+@login_required
+def list_all_jobs():
+    """Display the list of jobs."""
+    query = request.args.get('query', 'All')
+    location = request.args.get('location', 'All')
+    run_scraper = request.args.get('run_scraper', 'false').lower() == 'true'
+    force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
+    
+    # Get user's skills from session and profile
+    resume_skills = []
+    
+    # Get skills from session
+    session_skills = session.get('resume_skills', [])
+    if session_skills:
+        if isinstance(session_skills, str):
+            resume_skills.extend(s.strip() for s in session_skills.split(',') if s.strip())
+        elif isinstance(session_skills, list):
+            resume_skills.extend(s.strip() for s in session_skills if s.strip())
+            
+    # Get skills from user profile if available
+    if current_user and current_user.resume_skills:
+        profile_skills = current_user.resume_skills
+        if isinstance(profile_skills, str):
+            profile_skills = [s.strip() for s in profile_skills.split(',') if s.strip()]
+            resume_skills.extend(profile_skills)
+    
+    # Remove duplicates and empty strings
+    resume_skills = list(set(s for s in resume_skills if s))
+    
+    # Get the last scrape time from session
+    last_scrape_time = session.get('last_scrape_time')
+    
+    # Check if we need to scrape
+    need_scrape = (
+        force_refresh or  # Manual refresh requested
+        run_scraper or   # Search with new query
+        jobs_need_refresh()  # Time-based refresh check
+    )
+
+    # Get jobs either by scraping or from database
+    if need_scrape:
+        try:
+            # Show loading state
+            session['is_loading'] = True
+            
+            # Use scrape_jobs to get fresh data
+            jobs = scrape_jobs(
+                query=query,
+                location=location,
+                user_skills=resume_skills,
+                pages=3,  # Scrape 3 pages by default
+                force_clear=force_refresh,
+                user_id=current_user.id
+            )
+            
+            # Update last scrape time
+            session['last_scrape_time'] = datetime.utcnow().isoformat()
+            
+            if not jobs:
+                flash('No jobs found. Try adjusting your search criteria.', 'info')
+                jobs = []
+            else:
+                flash(f'Successfully found {len(jobs)} jobs!', 'success')
+        
+        except Exception as e:
+            flash(f'Error while scraping jobs: {str(e)}', 'error')
+            jobs = []
+        finally:
+            # Clear loading state
+            session.pop('is_loading', None)
+    else:
+        # Get existing jobs from database
+        jobs = search_jobs_db(query, location, resume_skills, user_id=current_user.id)
+
+    # Process jobs to ensure proper skill formatting and matching
+    missing_skills_set = set()
+    
+    for job in jobs:
+        # Handle required skills
+        if isinstance(job.get('required_skills'), str):
+            try:
+                job['required_skills'] = json.loads(job['required_skills'])
+            except (json.JSONDecodeError, TypeError):
+                job['required_skills'] = []
+        elif job.get('required_skills') is None:
+            job['required_skills'] = []
+
+        # Handle nice to have skills
+        if isinstance(job.get('nice_to_have_skills'), str):
+            try:
+                job['nice_to_have_skills'] = json.loads(job['nice_to_have_skills'])
+            except (json.JSONDecodeError, TypeError):
+                job['nice_to_have_skills'] = []
+        elif job.get('nice_to_have_skills') is None:
+            job['nice_to_have_skills'] = []
+
+        # Handle all skills
+        if isinstance(job.get('skills'), str):
+            try:
+                job['skills'] = json.loads(job['skills'])
+            except (json.JSONDecodeError, TypeError):
+                job['skills'] = []
+        elif job.get('skills') is None:
+            job['skills'] = []
+
+        # Calculate matching skills for required and nice-to-have if resume skills exist
+        if resume_skills:
+            # Normalize all skills to lowercase for matching
+            resume_skills_set = set(s.lower().strip() for s in resume_skills if s)
+            required_skills_set = set(s.lower().strip() for s in job.get('required_skills', []) if s)
+            nice_to_have_set = set(s.lower().strip() for s in job.get('nice_to_have_skills', []) if s)
+            all_skills_set = required_skills_set | nice_to_have_set
+            
+            # Find matching and missing skills while preserving original case
+            job['matching_required_skills'] = [s for s in job['required_skills'] if s and s.lower().strip() in resume_skills_set]
+            job['matching_nice_to_have_skills'] = [s for s in job['nice_to_have_skills'] if s and s.lower().strip() in resume_skills_set]
+            job['missing_skills'] = [s for s in job['required_skills'] if s and s.lower().strip() not in resume_skills_set]
+            
+            # Only count it as a skill gap if the skill appears frequently in job requirements
+            if len(job['missing_skills']) > 0:
+                missing_skills_set.update(s for s in job['missing_skills'] if s)
+            
+            # Calculate match percentages
+            if required_skills_set or nice_to_have_set:
+                required_weight = 0.7  # 70% weight for required skills
+                nice_to_have_weight = 0.3  # 30% weight for nice-to-have skills
+                
+                required_match = (len([s for s in job['matching_required_skills']]) / len(required_skills_set) * 100 * required_weight
+                                if required_skills_set else 0)
+                nice_to_have_match = (len([s for s in job['matching_nice_to_have_skills']]) / len(nice_to_have_set) * 100 * nice_to_have_weight
+                                    if nice_to_have_set else 0)
+                                    
+                job['match_percentage'] = int(required_match + nice_to_have_match)
+    
+    # Sort jobs by match percentage and other criteria
+    if resume_skills:
+        jobs.sort(key=lambda x: (
+            x.get('match_percentage', 0),
+            x.get('is_new', False),
+            x.get('is_urgent', False),
+            x.get('date_scraped', '')
+        ), reverse=True)
+    else:
+        jobs.sort(key=lambda x: (
+            x.get('is_new', False),
+            x.get('is_urgent', False),
+            x.get('date_scraped', '')
+        ), reverse=True)
+
+    # Convert missing_skills_set back to a sorted list for template
+    missing_skills = sorted(list(missing_skills_set))
+    
+    # Store missing skills in session for use in course recommendations
+    session['missing_skills'] = missing_skills    # If we have missing skills, fetch course recommendations
+    course_recommendations = {}
+    if missing_skills:
+        try:
+            course_recommendations = fetch_courses_by_skills(missing_skills)
+        except Exception as e:
+            print(f"Error fetching course recommendations: {e}")
+            course_recommendations = {}
+
+    return render_template(
+        'jobs_list.html',
+        jobs=jobs,
+        course_recommendations=course_recommendations,
+        query=query,
+        location=location,
+        run_scraper=need_scrape,
+        resume_skills=resume_skills,
+        missing_skills=missing_skills,
+        is_loading=session.get('is_loading', False)
+    )
+
+
+@app.route("/upload_resume", methods=['GET', 'POST'])
+@login_required
+def upload_resume():
+    form = ResumeUploadForm()
+    if form.validate_on_submit():
+        if not form.resume.data:
+            flash('Please select a resume file to upload.', 'warning')
+            return redirect(url_for('upload_resume'))
+            
+        temp_file = None
+        try:
+            # Get file and create safe filename
+            uploaded_file = form.resume.data
+            filename = secure_filename(uploaded_file.filename)
+            
+            # Create path in upload folder
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            
+            # Save the file
+            uploaded_file.save(file_path)
+            temp_file = file_path  # Keep track for cleanup
+            
+            # Parse resume using global nlp model
+            resume_data = parse_resume(file_path, nlp)
+            
+            if resume_data and 'skills' in resume_data:
+                # Clear old skills data
+                if 'resume_skills' in session:
+                    session.pop('resume_skills')
+                if 'missing_skills' in session:
+                    session.pop('missing_skills')
+                  # Clean and validate skills
+                cleaned_skills = [skill.strip() for skill in resume_data['skills'] if skill.strip()]
+                
+                # Update session with fresh skills
+                session['resume_skills'] = cleaned_skills
+                session['last_resume_update'] = datetime.utcnow().isoformat()
+                
+                # Update user profile with all resume data
+                current_user.resume_skills = ','.join(cleaned_skills)  # Store as comma-separated string
+                current_user.skills = ','.join(cleaned_skills)  # Also update regular skills
+                current_user.last_resume_update = datetime.utcnow()
+                
+                # Update location if found
+                if resume_data.get('location'):
+                    current_user.location = resume_data['location']
+                
+                # Update summary if found
+                if resume_data.get('summary'):
+                    current_user.summary = resume_data['summary']
+                
+                # Update work experience
+                if resume_data.get('work_experience'):
+                    # Clear existing work experience if any was parsed
+                    # Get existing experience IDs
+                    existing_experience = get_user_work_experience(current_user.id)
+                    for exp in existing_experience:
+                        delete_work_experience(exp['id'], current_user.id)
+                    
+                    # Add new experience entries
+                    for exp in resume_data['work_experience']:
+                        start_date = datetime.strptime(exp['start_date'], '%m/%Y')            if exp.get('start_date') else None
+                        
+                        # Handle current job and end date
+                        is_current = exp.get('current_job', False) or 'present' in str(exp.get('end_date', '')).lower()
+                        end_date = None if is_current else (
+                            datetime.strptime(exp['end_date'], '%m/%Y') if exp.get('end_date') else None
+                        )
+                        
+                        add_work_experience(
+                            user_id=current_user.id,
+                            company=exp['company'],
+                            title=exp['title'],
+                            start_date=start_date,
+                            end_date=end_date,
+                            description=exp.get('description'),
+                            current_job=is_current
+                        )
+                
+                # Update education
+                if resume_data.get('education'):
+                    # Clear existing education if any was parsed
+                    existing_education = get_user_education(current_user.id)
+                    for edu in existing_education:
+                        delete_education(edu['id'], current_user.id)
+                    
+                    # Add new education entries
+                    for edu in resume_data['education']:
+                        start_date = datetime.strptime(edu['start_date'], '%m/%Y') if edu.get('start_date') else None
+                        end_date = datetime.strptime(edu['end_date'], '%m/%Y') if edu.get('end_date') else None
+                        
+                        add_education(
+                            user_id=current_user.id,
+                            institution=edu['institution'],
+                            degree=edu['degree'],
+                            field_of_study=edu.get('field_of_study'),
+                            start_date=start_date,
+                            end_date=end_date,
+                            gpa=edu.get('gpa'),
+                            description=edu.get('description')
+                        )
+                
+                db.session.commit()
+                
+                flash('Resume uploaded and all information updated successfully!', 'success')
+                return redirect(url_for('list_all_jobs'))
+            else:
+                flash('No skills found in resume. Please update your profile manually.', 'warning')
+                return redirect(url_for('profile'))
+                
+        except Exception as e:
+            flash(f'Error analyzing resume: {str(e)}', 'danger')
+            return redirect(url_for('upload_resume'))
+            
+        finally:
+            # Clean up the temporary file
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except Exception as e:
+                    print(f"Warning: Could not remove temporary file {temp_file}: {e}")
+                    
+    return render_template('upload_resume.html', form=form)
+
+
+@app.route("/course_recommendations")
+@login_required
+def course_recommendations():
+    # Get the user's skills
+    user_skills = []
+    if current_user.skills:
+        user_skills = [skill.strip() for skill in current_user.skills.split(',')]
+    resume_skills = session.get('resume_skills', [])
+    
+    # Combine user's profile skills and resume skills
+    all_skills = list(set(user_skills + resume_skills))
+    
+    # Get missing skills from session
+    missing_skills = session.get('missing_skills', [])
+    
+    # Get course recommendations based on missing skills first, then other skills
+    priority_skills = missing_skills if missing_skills else all_skills
+    course_recommendations = fetch_courses_by_skills(priority_skills)
+    
+    # If we have space for more recommendations and have skills that aren't missing,
+    # add courses for existing skills as well
+    if missing_skills and len(course_recommendations) < len(missing_skills) * 5:
+        additional_courses = fetch_courses_by_skills([s for s in all_skills if s not in missing_skills])
+        # Add non-duplicate courses
+        for skill, courses in additional_courses.items():
+            if skill not in course_recommendations:
+                course_recommendations[skill] = courses
+    
+    return render_template(
+        'course_recommendations.html',
+        course_recommendations=course_recommendations,
+        user_skills=all_skills,
+        missing_skills=missing_skills
+    )
 
 
 @app.route('/reset_skills')
 @login_required
 def reset_skills():
+    # Clear skills from session
     if 'resume_skills' in session:
         session.pop('resume_skills')
-        flash('Resume skills have been cleared.', 'info')
-    return redirect(url_for('index'))
+    
+    # Clear skills from user profile
+    if current_user.is_authenticated:
+        update_user_profile(current_user.id, skills=None)
+        flash('Skills have been reset', 'info')
+    
+    return redirect(url_for('list_all_jobs'))
 
-@app.route('/enter_location', methods=['GET', 'POST'])
+
+@app.route('/refresh_jobs')
 @login_required
-def enter_location():
-    """Page to manually enter location if not found in resume"""
-    if request.method == 'POST':
-        location = request.form.get('location', '')
-        session['resume_location'] = location
-        return redirect(url_for('jobs_list', query='all', location=location, run_scraper=True))
-    
-    return render_template('enter_location.html')
-@app.route('/debug_skills', methods=['GET', 'POST'])
-def debug_skills():
-    """Debug route for testing skill extraction"""
-    if request.method == 'POST':
-        if 'resume' not in request.files:
-            return jsonify({'error': 'No file part'})
+def refresh_jobs():
+    """Force refresh of job listings"""
+    try:
+        # Set loading state
+        session['is_loading'] = True
         
-        file = request.files['resume']
+        # Get existing query and location
+        query = request.args.get('query', 'All')
+        location = request.args.get('location', 'All')
         
-        if file.filename == '':
-            return jsonify({'error': 'No selected file'})
+        # Get user's skills from session and profile
+        resume_skills = []
+        session_skills = session.get('resume_skills', [])
+        if session_skills:
+            if isinstance(session_skills, str):
+                resume_skills.extend(s.strip() for s in session_skills.split(',') if s.strip())
+            elif isinstance(session_skills, list):
+                resume_skills.extend(s.strip() for s in session_skills if s.strip())
         
-        if file and allowed_file(file.filename):
-            # Save the file temporarily
-            filename = secure_filename(file.filename)
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            
-            # Create the upload folder if it doesn't exist
-            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-            
-            file.save(file_path)
-            print(f"Resume saved temporarily at: {file_path}")
-            
-            try:
-                # Load spaCy model
-                print("Loading spaCy model...")
-                nlp = spacy.load("en_core_web_sm")
-                
-                # Extract text from the resume
-                print("Extracting text from file...")
-                file_extension = os.path.splitext(filename)[1].lower()
-                
-                if file_extension == '.pdf':
-                    text = extract_text_from_pdf(file_path)
-                elif file_extension == '.docx':
-                    text = extract_text_from_docx(file_path)
-                elif file_extension == '.txt':
-                    text = extract_text_from_txt(file_path)
-                else:
-                    return jsonify({'error': 'Unsupported file format'})
-                
-                print(f"Extracted text length: {len(text)}")
-                
-                if not text:
-                    return jsonify({'error': 'Could not extract text from the resume'})
-                
-                # Extract skills from the text
-                print("Extracting skills...")
-                skills = extract_skills_from_text(text, nlp)
-                
-                # Extract location from the text
-                print("Extracting location...")
-                location = extract_location_from_text(text, nlp)
-                
-                return jsonify({
-                    'success': True,
-                    'text_length': len(text),
-                    'text_preview': text[:500] + '...' if len(text) > 500 else text,
-                    'skills': skills,
-                    'skills_count': len(skills),
-                    'location': location
-                })
-            except Exception as e:
-                return jsonify({'error': f'Error processing resume: {str(e)}'})
-            finally:
-                # Remove the temporary file
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                    print(f"Temporary file removed: {file_path}")
+        # Get skills from user profile if available
+        if current_user and current_user.resume_skills:
+            profile_skills = current_user.resume_skills
+            if isinstance(profile_skills, str):
+                profile_skills = [s.strip() for s in profile_skills.split(',') if s.strip()]
+                resume_skills.extend(profile_skills)
+        
+        # Remove duplicates and empty strings
+        resume_skills = list(set(s for s in resume_skills if s))
+          # Run the scraper with force_clear=True to get fresh data
+        jobs = scrape_jobs(
+            query=query,
+            location=location,
+            user_skills=resume_skills,
+            pages=3,
+            force_clear=True,
+            user_id=current_user.id
+        )
+        
+        if jobs:
+            flash(f'Successfully found {len(jobs)} jobs!', 'success')
         else:
-            return jsonify({'error': 'Invalid file format. Please upload a PDF, DOCX, or TXT file.'})
-    
-    # If GET request, show the upload form
-    return '''
-    <!doctype html>
-    <html>
-    <head>
-        <title>Debug Skills Extraction</title>
-        <style>
-            body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-            h1 { color: #333; }
-            form { margin-bottom: 20px; }
-            #result { white-space: pre-wrap; background: #f5f5f5; padding: 15px; border-radius: 5px; }
-            .skills-list { display: flex; flex-wrap: wrap; }
-            .skill { background: #e0f7fa; padding: 5px 10px; margin: 5px; border-radius: 15px; }
-        </style>
-    </head>
-    <body>
-        <h1>Debug Skills Extraction</h1>
-        <form id="upload-form" enctype="multipart/form-data">
-            <input type="file" name="resume" accept=".pdf,.docx,.txt">
-            <button type="submit">Upload and Extract Skills</button>
-        </form>
-        <div id="result"></div>
+            flash('No jobs found. Try adjusting your search criteria.', 'info')
+            
+        # Update last scrape time
+        session['last_scrape_time'] = datetime.utcnow().isoformat()
         
-        <script>
-            document.getElementById('upload-form').addEventListener('submit', function(e) {
-                e.preventDefault();
-                
-                const form = new FormData(this);
-                const resultDiv = document.getElementById('result');
-                
-                resultDiv.innerHTML = 'Processing...';
-                
-                fetch('/debug_skills', {
-                    method: 'POST',
-                    body: form
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) {
-                        resultDiv.innerHTML = `<h2>Error</h2><p>${data.error}</p>`;
-                    } else {
-                        let skillsHtml = '';
-                        if (data.skills && data.skills.length > 0) {
-                            skillsHtml = '<div class="skills-list">';
-                            data.skills.forEach(skill => {
-                                skillsHtml += `<div class="skill">${skill}</div>`;
-                            });
-                            skillsHtml += '</div>';
-                        } else {
-                            skillsHtml = '<p>No skills extracted</p>';
-                        }
-                        
-                        resultDiv.innerHTML = `
-                            <h2>Results</h2>
-                            <p><strong>Text Length:</strong> ${data.text_length} characters</p>
-                            <p><strong>Text Preview:</strong></p>
-                            <div style="max-height: 200px; overflow-y: auto; margin-bottom: 20px;">
-                                ${data.text_preview}
-                            </div>
-                            <p><strong>Location:</strong> ${data.location || 'Not found'}</p>
-                            <p><strong>Skills (${data.skills_count}):</strong></p>
-                            ${skillsHtml}
-                        `;
-                    }
-                })
-                .catch(error => {
-                    resultDiv.innerHTML = `<h2>Error</h2><p>${error.message}</p>`;
-                });
-            });
-        </script>
-    </body>
-    </html>
-    '''
+    except Exception as e:
+        flash(f'Error refreshing jobs: {str(e)}', 'danger')
+    finally:
+        # Clear loading state
+        session.pop('is_loading', None)
+        
+    return redirect(request.referrer or url_for('index'))
+
+
+@app.route('/scrape_jobs_with_profile', methods=['GET'])
+@login_required
+def scrape_jobs_with_profile():
+    """Scrape jobs using the user's profile information."""
+    try:
+        if not current_user.is_authenticated:
+            flash('Please login to search jobs.', 'warning')
+            return redirect(url_for('login'))
+
+        # Get user profile information
+        user = User.query.get(current_user.id)
+        if not user:
+            flash('User profile not found.', 'error')
+            return redirect(url_for('profile'))
+        
+        # Extract skills and location from user profile
+        user_skills = user.skills.split(',') if user.skills else []
+        user_location = user.location if user.location else "All"
+        
+        # Run the job scraper with the user's profile data
+        jobs = scrape_jobs(
+            query="All",  # Use "All" since we're using skills directly
+            location=user_location,
+            user_skills=user_skills,
+            pages=3,  # Scrape 3 pages by default
+            force_clear=True,  # Clear existing jobs to get fresh results
+            user_id=user.id  # Explicitly pass user.id
+        )
+        
+        if jobs:
+            flash(f'Successfully scraped {len(jobs)} jobs matching your profile!', 'success')
+        else:
+            flash('No jobs found matching your profile. Try adjusting your skills or location.', 'info')
+        
+        return redirect(url_for('list_all_jobs'))
+        
+    except Exception as e:
+        flash(f'Error scraping jobs: {str(e)}', 'error')
+        return redirect(url_for('list_all_jobs'))
+
+
+@app.route('/check_refresh_status', methods=['GET'])
+@login_required
+def check_refresh_status():
+    """Check if jobs need to be refreshed."""
+    needs_refresh = jobs_need_refresh()
+    last_scrape = session.get('last_scrape_time')
+    return jsonify({
+        'needs_refresh': needs_refresh,
+        'last_scrape': last_scrape,
+        'loading': session.get('is_loading', False)
+    })
+
 
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()  # Create database tables
-    app.run(debug=True)
+    try:
+        with app.app_context():
+            db.create_all()
+            init_db()  # Initialize database tables
+        app.run(debug=True)
+    except Exception as e:
+        print(f"Error starting application: {e}")
+        traceback.print_exc()

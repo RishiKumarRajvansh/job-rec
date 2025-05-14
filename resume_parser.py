@@ -2,65 +2,372 @@ import os
 import re
 import PyPDF2
 import docx
-import docx2txt
-import spacy
-# from fuzzywuzzy import fuzz # Not used in the current nlp_utils.py
-# from nlp_utils import extract_skills_from_text # Redundant, using the provided nlp_utils.py
+import traceback
+from datetime import datetime
+from dateutil import parser as date_parser
 from nlp_utils import extract_skills_from_text, extract_location_from_text
 
 
 def parse_resume(file_path, nlp_model, skill_keywords=None):
     """
-    Parse resume file and extract text, skills, and location.
-
-    Args:
-        file_path (str): Path to the resume file
-        nlp_model: spaCy NLP model
-        skill_keywords (list): List of skill keywords to look for (not used in current nlp_utils)
-
-    Returns:
-        tuple: (extracted_text, extracted_skills, extracted_location)
+    Parse resume file and extract comprehensive profile information.
     """
-    extracted_text = ""
-    extracted_skills = []
-    extracted_location = ""
     try:
         print(f"Starting resume parsing for file: {file_path}")
-
-        # Extract text based on file extension
-        file_extension = os.path.splitext(file_path)[1].lower()
-
-        if file_extension == '.pdf':
-            extracted_text = extract_text_from_pdf(file_path)
-        elif file_extension == '.docx':
-            extracted_text = extract_text_from_docx(file_path)
-        elif file_extension == '.txt':
-            extracted_text = extract_text_from_txt(file_path)
-        else:
-            raise ValueError(f"Unsupported file format: {file_extension}")
-
+        extracted_text = extract_text_by_file_type(file_path)
         extracted_text = clean_text(extracted_text)
 
-        print(f"Extracted text length: {len(extracted_text)}")
         if len(extracted_text) < 100:
-            print(f"Warning: Very short text extracted: {extracted_text}")
+            print("Warning: Extracted text is very short, may indicate parsing issues")
+            return None
 
-        # Extract skills from the text
-        extracted_skills = extract_skills_from_text(extracted_text, nlp_model, skill_keywords)
-        print(f"Extracted {len(extracted_skills)} skills from resume")
+        # Parse all profile components
+        profile_data = {
+            'skills': extract_skills_from_text(extracted_text, nlp_model),
+            'location': extract_location_from_text(extracted_text, nlp_model),
+            'work_experience': extract_work_experience(extracted_text, nlp_model),
+            'education': extract_education(extracted_text, nlp_model),
+            'certifications': extract_certifications(extracted_text),
+            'extracted_text': extracted_text,
+            'summary': extract_summary(extracted_text)  # New field
+        }
 
-        # Extract location from the text
-        extracted_location = extract_location_from_text(extracted_text, nlp_model)
-        print(f"Extracted location: {extracted_location}")
+        # Validate extracted data
+        if not profile_data['skills']:
+            print("Warning: No skills extracted from resume")
+        if not profile_data['work_experience']:
+            print("Warning: No work experience extracted from resume")
+        if not profile_data['education']:
+            print("Warning: No education information extracted from resume")
 
-        return extracted_text, extracted_skills, extracted_location
+        return profile_data
 
     except Exception as e:
-        import traceback
-
         print(f"Error parsing resume: {e}")
         print(traceback.format_exc())
-        return extracted_text, extracted_skills, extracted_location
+        return None
+
+
+def extract_work_experience(text, nlp_model):
+    experiences = []
+    # Common section headers for work experience
+    work_headers = [
+        r'work\s+experience',
+        r'professional\s+experience',
+        r'employment\s+history',
+        r'work\s+history',
+        r'career\s+history',
+    ]
+    
+    # Try to find the work experience section
+    experience_section = extract_section(text, work_headers)
+    if not experience_section:
+        return experiences
+
+    # Process the text with spaCy for better entity recognition
+    doc = nlp_model(experience_section)
+    
+    # Split into potential job entries (look for date patterns or company names)
+    job_entries = split_into_entries(experience_section)
+    
+    for entry in job_entries:
+        job = {}
+          # Extract dates
+        dates = extract_dates(entry)
+        if dates:
+            job['start_date'] = dates[0]
+            job['end_date'] = dates[1] if len(dates) > 1 else None
+            job['current_job'] = bool('present' in entry.lower() or not job.get('end_date'))
+        
+        # Extract company and title
+        company_title = extract_company_and_title(entry, nlp_model)
+        if company_title:
+            job['company'] = company_title['company']
+            job['title'] = company_title['title']
+        
+        # Extract description
+        job['description'] = extract_job_description(entry)
+        
+        if job.get('company') and job.get('title'):
+            experiences.append(job)
+    
+    return experiences
+
+
+def extract_education(text, nlp_model):
+    education = []
+    # Common section headers for education
+    edu_headers = [
+        r'education',
+        r'academic\s+background',
+        r'academic\s+qualifications',
+        r'educational\s+background',
+    ]
+    
+    # Try to find the education section
+    education_section = extract_section(text, edu_headers)
+    if not education_section:
+        return education
+
+    # Process the text with spaCy
+    doc = nlp_model(education_section)
+    
+    # Split into potential education entries
+    edu_entries = split_into_entries(education_section)
+    
+    for entry in edu_entries:
+        edu = {}
+        
+        # Extract institution and degree
+        edu_info = extract_institution_and_degree(entry, nlp_model)
+        if edu_info:
+            edu.update(edu_info)
+        
+        # Extract dates
+        dates = extract_dates(entry)
+        if dates:
+            edu['start_date'] = dates[0]
+            edu['end_date'] = dates[1] if len(dates) > 1 else None
+        
+        # Extract GPA if available
+        edu['gpa'] = extract_gpa(entry)
+        
+        if edu.get('institution') and edu.get('degree'):
+            education.append(edu)
+    
+    return education
+
+
+def extract_certifications(text):
+    certifications = []
+    # Common section headers for certifications
+    cert_headers = [
+        r'certifications?',
+        r'professional\s+certifications?',
+        r'technical\s+certifications?',
+        r'certificates?',
+    ]
+    
+    # Try to find the certifications section
+    cert_section = extract_section(text, cert_headers)
+    if not cert_section:
+        return certifications
+
+    # Look for certification patterns
+    cert_patterns = [
+        r'([A-Za-z0-9]+(?:[-\s][A-Za-z0-9]+)*\s+Certification)',
+        r'(?:Certified|Licensed)\s+([A-Za-z0-9]+(?:[-\s][A-Za-z0-9]+)*)',
+        r'([A-Za-z0-9]+(?:[-\s][A-Za-z0-9]+)*)\s+Certificate',
+    ]
+    
+    for pattern in cert_patterns:
+        matches = re.finditer(pattern, cert_section, re.IGNORECASE)
+        for match in matches:
+            cert = match.group(1).strip()
+            if cert and cert not in certifications:
+                certifications.append(cert)
+    
+    return certifications
+
+
+def extract_summary(text):
+    """Extract professional summary or objective from resume text."""
+    summary_patterns = [
+        r'(?i)(?:SUMMARY|PROFILE|OBJECTIVE)[:\s]*((?:[^\n]*\n?)*?)(?=\n\s*\n|\Z)',
+        r'(?i)(?:PROFESSIONAL\s+SUMMARY|CAREER\s+OBJECTIVE)[:\s]*((?:[^\n]*\n?)*?)(?=\n\s*\n|\Z)'
+    ]
+    
+    for pattern in summary_patterns:
+        match = re.search(pattern, text)
+        if match:
+            summary = match.group(1).strip()
+            # Clean up the summary
+            summary = re.sub(r'\s+', ' ', summary)
+            return summary[:500]  # Limit length
+    
+    return ""
+
+
+# Helper functions for section extraction
+def extract_section(text, headers, next_section_min_lines=2):
+    text = text.strip()
+    section_text = ""
+    
+    # Try to find the section header
+    for header in headers:
+        matches = list(re.finditer(header, text, re.IGNORECASE))
+        if matches:
+            start_pos = matches[0].end()
+            # Look for the next section header
+            next_header_pos = find_next_section(text[start_pos:])
+            if next_header_pos > 0:
+                section_text = text[start_pos:start_pos + next_header_pos].strip()
+            else:
+                section_text = text[start_pos:].strip()
+            break
+    
+    return section_text
+
+
+def find_next_section(text):
+    # Common section headers that might follow
+    next_headers = [
+        r'\n[A-Z][A-Z\s]+(?:\:|$)',  # Capitalized words followed by colon or end of line
+        r'\n(?:WORK|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS|PROJECTS|REFERENCES)(?:\s+|$)',
+    ]
+    
+    min_pos = float('inf')
+    for pattern in next_headers:
+        matches = list(re.finditer(pattern, text, re.IGNORECASE))
+        if matches:
+            pos = matches[0].start()
+            if pos > 0 and pos < min_pos:
+                min_pos = pos
+    
+    return min_pos if min_pos != float('inf') else -1
+
+
+def extract_dates(text):
+    dates = []
+    # Various date patterns
+    date_patterns = [
+        # Full month names or abbreviations with year
+        r'(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)[,\s]+\d{4}',
+        # MM/DD/YYYY or MM/YYYY formats 
+        r'\d{1,2}/(?:\d{1,2}/)\d{4}',
+        r'\d{1,2}/\d{4}',
+        # YYYY-MM-DD or YYYY-MM formats
+        r'\d{4}-\d{1,2}(?:-\d{1,2})?',
+        # Just year as fallback
+        r'\d{4}'
+    ]
+    
+    for pattern in date_patterns:
+        matches = re.finditer(pattern, text, re.IGNORECASE)
+        for match in matches:
+            try:
+                date_str = match.group(0).strip()
+                # Special handling for standalone years
+                if re.match(r'^\d{4}$', date_str):
+                    date_str = f'01/01/{date_str}'
+                
+                # Parse the date string
+                parsed_date = date_parser.parse(date_str).date()
+                
+                # Format as MM/YYYY
+                formatted_date = parsed_date.strftime('%m/%Y')
+                if formatted_date not in dates:
+                    dates.append(formatted_date)
+            except (ValueError, date_parser.ParserError):
+                continue
+    
+    # Sort dates chronologically
+    return sorted(dates)
+
+
+def extract_company_and_title(text, nlp_model):
+    doc = nlp_model(text)
+    company = None
+    title = None
+    
+    # Look for organization entities
+    for ent in doc.ents:
+        if ent.label_ == "ORG" and not company:
+            company = ent.text
+            break
+    
+    # Look for job titles using common patterns
+    title_patterns = [
+        # Common tech roles
+        r'(?:^|\n|\s)([A-Z][a-zA-Z\s]+(?:Engineer|Engineering|Developer|Programmer|Architect|Specialist|Lead|Manager|Director|Analyst|Consultant|Designer|Administrator|DevOps|Scientist|Researcher))',
+        # Software-specific roles
+        r'(?:^|\n|\s)(Software\s+[A-Za-z\s]+)',
+        r'(?:^|\n|\s)((?:Senior|Junior|Principal|Staff|Technical|Lead|Chief|Head)\s+[A-Za-z\s]+)',
+        # Other professional titles
+        r'(?:^|\n|\s)([A-Z][a-zA-Z\s]+(?:Professional|Expert|Coordinator|Supervisor|Officer|Chief|Head))',
+        # Fallback for any capitalized role that looks like a title
+        r'(?:^|\n)([A-Z][a-zA-Z\s]{2,}(?=\s*(?:at|for|with|in)\s))'
+    ]
+    
+    for pattern in title_patterns:
+        match = re.search(pattern, text)
+        if match:
+            title = match.group(1).strip()
+            break
+    
+    # Fallback company detection if spaCy didn't find it
+    if not company:
+        company_patterns = [
+            r'(?:at|for|with)\s+([A-Z][A-Za-z0-9\s&.,]+?)(?=\s*(?:in|from|until|as|\n|$))',
+            r'(?<=\n)([A-Z][A-Za-z0-9\s&.,]+?)(?=\s*(?:•|\n|$))',
+        ]
+        for pattern in company_patterns:
+            match = re.search(pattern, text)
+            if match:
+                potential_company = match.group(1).strip()
+                if potential_company and len(potential_company) > 1:
+                    company = potential_company
+                    break
+    
+    if company or title:
+        return {'company': company, 'title': title}
+    return None
+
+
+def extract_institution_and_degree(text, nlp_model):
+    doc = nlp_model(text)
+    education = {}
+    
+    # Look for educational institution entities
+    for ent in doc.ents:
+        if ent.label_ == "ORG" and not education.get('institution'):
+            education['institution'] = ent.text
+            break
+    
+    # Look for degree patterns
+    degree_patterns = [
+        r'(?:Bachelor|Master|PhD|B\.?S\.?|M\.?S\.?|B\.?A\.?|M\.?A\.?|Ph\.?D\.?|M\.?B\.?A\.?)(?:\sin\s|\sof\s)?([A-Za-z\s]+)',
+        r'(?:Associate|Bachelor\'s|Master\'s|Doctorate)\s(?:in|of)\s([A-Za-z\s]+)'
+    ]
+    
+    for pattern in degree_patterns:
+        match = re.search(pattern, text)
+        if match:
+            education['degree'] = match.group(0).strip()
+            education['field_of_study'] = match.group(1).strip()
+            break
+    
+    return education if education.get('institution') or education.get('degree') else None
+
+
+def extract_gpa(text):
+    gpa_patterns = [
+        r'GPA\s*(?:of\s*)?(\d+\.\d+)',
+        r'Grade Point Average:\s*(\d+\.\d+)',
+    ]
+    
+    for pattern in gpa_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            try:
+                return float(match.group(1))
+            except ValueError:
+                continue
+    return None
+
+
+def extract_text_by_file_type(file_path):
+    """Extract text based on file extension"""
+    file_extension = os.path.splitext(file_path)[1].lower()
+    
+    if file_extension == '.pdf':
+        return extract_text_from_pdf(file_path)
+    elif file_extension == '.docx':
+        return extract_text_from_docx(file_path)
+    elif file_extension == '.txt':
+        return extract_text_from_txt(file_path)
+    else:
+        raise ValueError(f"Unsupported file format: {file_extension}")
 
 
 def extract_text_from_pdf(file_path):
@@ -119,183 +426,6 @@ def extract_text_from_txt(file_path):
         return text
 
 
-# def extract_location_from_text(text, nlp_model): # Removed, using the provided nlp_utils.py
-#     """Extract location from text using NLP and regex"""
-#     locations = []
-
-#     # 1. spaCy NER
-#     doc = nlp_model(text)
-#     locations.extend([ent.text for ent in doc.ents if ent.label_ == "GPE"])
-
-#     # 2. Regular Expressions
-#     location_patterns = [
-#         r"(?i)([A-Z][a-z]+(?:[\s-][A-Z][a-z]+)*),\s*(?:[A-Z]{2}|[A-Z][a-z]+)",  # City, State
-#         r"(?i)(?:Address|Location|City|Town|State|Country|Region)\s*:\s*([^\n,]+)",
-#     ]
-#     for pattern in location_patterns:
-#         locations.extend(re.findall(pattern, text))
-
-#     # 3. Clean and Deduplicate
-#     unique_locations = []
-#     for loc in locations:
-#         loc = loc.strip()
-#         if loc and loc not in unique_locations:
-#             unique_locations.append(loc)
-
-#     # 4. Return the first location found (you can implement a scoring mechanism here)
-#     return unique_locations[0] if unique_locations else ""
-
-def extract_skills_from_text(text, nlp_model, skill_keywords=None):
-    """
-    Extract skills from text using NLP with a focus on identifying the skills section.
-    This function no longer uses the skill_keywords parameter for extraction,
-    relying solely on NLP and pattern matching within the text.
-    Args:
-        text (str): Text to extract skills from
-        nlp_model: spaCy NLP model
-        skill_keywords (list): This parameter is ignored in this version.
-    Returns:
-        list: List of extracted skills
-    """
-    print("Starting skill extraction...")
-    if not text or not nlp_model:
-        print("No text or NLP model provided")
-        return []
-
-    # First, try to identify the skills section in the resume
-    # Common section headers for skills
-    skill_section_patterns = [
-        r'(?:technical\s+)?skills(?:\s+and\s+competencies)?(?:\s*:|\s*\n)',
-        r'(?:technical|professional)\s+(?:skills|proficiencies)(?:\s*:|\s*\n)',
-        r'(?:core\s+)?competencies(?:\s*:|\s*\n)',
-        r'(?:technical|professional)\s+(?:qualifications|expertise)(?:\s*:|\s*\n)',
-        r'technologies(?:\s*:|\s*\n)',
-        r'technical\s+background(?:\s*:|\s*\n)',
-        r'skill\s+set(?:\s*:|\s*\n)',
-        r'areas\s+of\s+expertise(?:\s*:|\s*\n)',
-        r'technical\s+knowledge(?:\s*:|\s*\n)',
-        r'programming\s+(?:languages|skills)(?:\s*:|\s*\n)',
-        r'software\s+(?:proficiencies|skills)(?:\s*:|\s*\n)',
-        r'tools\s+(?:and\s+technologies|&\s+technologies)(?:\s*:|\s*\n)',
-    ]
-    # Try to find the skills section
-    skills_section_text = None
-    next_section_start = None
-    # Add a marker to the end to ensure the last section is captured if no next header exists
-    text_with_end_marker = text + "\nEND_OF_DOCUMENT_MARKER"
-    for pattern in skill_section_patterns:
-        matches = list(re.finditer(pattern, text_with_end_marker, re.IGNORECASE))
-        if matches:
-            # Found a skills section header
-            section_start = matches[0].end() # Use .end() to start after the header
-            # Look for the next section header to determine where skills section ends
-            # Common section headers that might follow skills
-            next_section_patterns = [
-                r'education(?:\s*:|\s*\n)',
-                r'experience(?:\s*:|\s*\n)',
-                r'employment(?:\s+history)?(?:\s*:|\s*\n)',
-                r'work(?:\s+history)?(?:\s*:|\s*\n)',
-                r'projects(?:\s*:|\s*\n)',
-                r'certifications(?:\s*:|\s*\n)',
-                r'awards(?:\s*:|\s*\n)',
-                r'publications(?:\s*:|\s*\n)',
-                r'languages(?:\s*:|\s*\n)', # Note: 'languages' can be a skill category, but also a section header
-                r'interests(?:\s*:|\s*\n)',
-                r'references(?:\s*:|\s*\n)',
-                r'additional\s+information(?:\s*:|\s*\n)',
-                r'END_OF_DOCUMENT_MARKER', # Use the marker as a potential end
-            ]
-            # Find all potential next sections *after* the current section start
-            potential_next_sections = []
-            for next_pattern in next_section_patterns:
-               # Search only in the text *after* the current section header
-               next_matches = list(re.finditer(next_pattern, text_with_end_marker[section_start:], re.IGNORECASE))
-               if next_matches:
-                   # Add the start position relative to the original text
-                   potential_next_sections.append(section_start + next_matches[0].start())
-            # If we found potential next sections, use the closest one
-            if potential_next_sections:
-                next_section_start = min(potential_next_sections)
-                skills_section_text = text_with_end_marker[section_start:next_section_start].strip()
-            else:
-                # If no next section found, use the rest of the text
-                skills_section_text = text_with_end_marker[section_start:].strip()
-            print(f"Found skills section starting after '{matches[0].group(0).strip()}': {len(skills_section_text)} characters")
-            break # Stop after finding the first skills section
-
-    # If we couldn't identify a specific skills section, use the whole text
-    if not skills_section_text:
-        print("Could not identify a specific skills section, using whole text")
-        skills_section_text = text
-
-    extracted_skills = set()
-    # Extract skills using bullet points and list patterns
-    print("Extracting skills from bullet points and lists...")
-    bullet_patterns = [
-        r'(?:^|\n)[\s•\-*]+([^•\-*\n]+)',  # Bullet points at start of line
-        r'(?:^|\n)[\d]+\.[\s]+([^\n]+)',   # Numbered lists
-    ]
-    for pattern in bullet_patterns:
-        matches = re.finditer(pattern, skills_section_text, re.MULTILINE)
-        for match in matches:
-            skill_text = match.group(1).strip()
-            # Check if this looks like a skill (not too long, not too short)
-            if 2 <= len(skill_text) <= 50:
-                # Split by common delimiters within a list item
-                delimiters = r'[,;]\s*|\s+and\s+'
-                skills_in_item = re.split(delimiters, skill_text, flags=re.IGNORECASE)
-                for skill in skills_in_item:
-                    skill = skill.strip()
-                    # Further refine: remove trailing punctuation, check length
-                    skill = re.sub(r'[.,;:]+$', '', skill)
-                    if skill and len(skill) > 1: # Avoid single characters or empty strings
-                        extracted_skills.add(skill)
-
-    # Look for skills in colon-separated lists (e.g., "Skills: Python, Java, SQL")
-    print("Extracting skills from colon-separated lists...")
-    colon_list_patterns = [
-        r'(?i)(?:Skills|Technologies|Tools|Proficiencies|Expertise|Languages)\s*:\s*(.+)',
-    ]
-    for pattern in colon_list_patterns:
-        match = re.search(pattern, skills_section_text)
-        if match:
-            list_text = match.group(1).strip()
-            # Split the list text by commas, semicolons, or "and"
-            skills_in_list = re.split(r'[,;]\s*|\s+and\s+', list_text, flags=re.IGNORECASE)
-            for skill in skills_in_list:
-                skill = skill.strip()
-                # Further refine: remove trailing punctuation, check length
-                skill = re.sub(r'[.,;:]+$', '', skill)
-                if skill and len(skill) > 1:
-                    extracted_skills.add(skill)
-
-    # --- Additional NLP-based extraction (can be noisy) ---
-    # Process the skills section text with spaCy for potential entities or noun chunks
-    print("Performing additional NLP extraction...")
-    doc_skills_section = nlp_model(skills_section_text)
-    # Look for proper nouns (NNP) or noun chunks that might be skills
-    # This can be very noisy and requires careful filtering
-    potential_skills_nlp = set()
-    for chunk in doc_skills_section.noun_chunks:
-        chunk_text = chunk.text.strip()
-        # Filter out common non-skill phrases or short chunks
-        if len(chunk_text.split()) <= 4 and len(chunk_text) > 2 and chunk_text.lower() not in ["experience", "education", "projects", "summary", "technologies", "skills", "proficiencies", "competencies", "qualifications", "expertise", "background", "set", "areas", "knowledge", "languages", "software", "tools", "information", "history"]:
-            potential_skills_nlp.add(chunk_text)
-
-    # Add potential NLP skills, but be cautious
-    # A more advanced approach would involve checking these against a known list or using a custom NER model
-    # For now, we'll add them but they might include noise.
-    # Consider adding only if they contain at least one capitalized word (heuristic for proper nouns/tech names)
-    # Or if they look like common tech terms (e.g., contain '.', '-', '#', '+')
-    for skill in potential_skills_nlp:
-        if any(char in skill for char in ['.', '-', '#', '+']) or any(word.isupper() or (len(word) > 1 and word[0].isupper()) for word in skill.split()):
-            extracted_skills.add(skill)
-
-    # Clean and format the final list
-    final_skills = sorted(list(extracted_skills))
-    print(f"Finished skill extraction. Found {len(final_skills)} skills.")
-    return final_skills
-
 def clean_text(text):
     """Clean extracted text."""
     if not text:
@@ -308,3 +438,44 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text)
 
     return text.strip()
+
+
+def split_into_entries(section_text):
+    """Split a section into individual entries based on common patterns"""
+    entries = []
+    
+    # Try to split by date patterns first
+    date_splits = re.split(r'\n(?=(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)[,\s]+\d{4})', section_text)
+    
+    if len(date_splits) > 1:
+        entries.extend(date_splits)
+    else:
+        # Try splitting by bullet points or numbers
+        bullet_splits = re.split(r'\n(?=(?:•|\*|\-|\d+\.))', section_text)
+        if len(bullet_splits) > 1:
+            entries.extend(bullet_splits)
+        else:
+            # As a last resort, split by double newlines
+            entries.extend([entry.strip() for entry in section_text.split('\n\n') if entry.strip()])
+    
+    return [entry.strip() for entry in entries if entry.strip()]
+
+
+def extract_job_description(entry):
+    """Extract job description from an entry"""
+    # Remove any dates
+    desc = re.sub(r'(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)[,\s]+\d{4}', '', entry)
+    
+    # Remove job title and company name patterns
+    desc = re.sub(r'^[A-Z][a-zA-Z\s]+(?:Engineer|Developer|Manager|Director|Analyst|Consultant|Designer|Architect)', '', desc)
+    desc = re.sub(r'^[A-Z][a-zA-Z\s]+,?\s+(?:Inc\.|LLC|Ltd\.|Corporation|Corp\.|Limited)?', '', desc)
+    
+    # Clean up the description
+    desc = desc.strip()
+    
+    # Look for bullet points
+    bullet_points = re.findall(r'(?:^|\n)[•\-\*]\s*(.+?)(?=(?:\n[•\-\*]|\n\n|$))', desc, re.DOTALL)
+    if bullet_points:
+        return '\n'.join('• ' + point.strip() for point in bullet_points)
+    
+    return desc

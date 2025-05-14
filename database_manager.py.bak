@@ -1,0 +1,632 @@
+import sqlite3
+import os
+import json
+from datetime import datetime
+
+# Database file path
+DB_PATH = 'instance/job_recommender.db'
+
+def get_db_connection():
+    """Create a connection to the SQLite database."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row  # This enables column access by name
+    return conn
+
+def init_db():
+    """Initialize the database with required tables if they don't exist."""
+    # Ensure the instance directory exists
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+      # Create jobs table if it doesn't exist
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id TEXT,
+        title TEXT NOT NULL,
+        company TEXT,
+        location TEXT,
+        url TEXT,
+        description TEXT,
+        snippet TEXT,
+        source TEXT,
+        skills TEXT,
+        salary_text TEXT,
+        job_type TEXT,
+        source_url TEXT UNIQUE,
+        platform TEXT,
+        date_scraped TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        is_remote BOOLEAN DEFAULT 0,
+        is_new BOOLEAN DEFAULT 0,
+        is_urgent BOOLEAN DEFAULT 0,
+        logo_url TEXT,
+        posted_date TEXT
+    )
+    ''')
+    
+    # Create job_skills table if it doesn't exist
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS job_skills (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER NOT NULL,
+        skill TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (job_id) REFERENCES jobs (id)
+    )
+    ''')
+    
+    # Create users table with enhanced profile fields
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        email TEXT NOT NULL UNIQUE,
+        password TEXT NOT NULL,
+        skills TEXT,
+        certifications TEXT,
+        summary TEXT,
+        last_resume_update TIMESTAMP
+    )
+    ''')
+    
+    # Create work_experience table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS work_experience (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        company TEXT NOT NULL,
+        title TEXT NOT NULL,
+        start_date DATE NOT NULL,
+        end_date DATE,
+        description TEXT,
+        current_job BOOLEAN DEFAULT 0,
+        FOREIGN KEY (user_id) REFERENCES users (id)
+    )
+    ''')
+    
+    # Create education table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS education (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        institution TEXT NOT NULL,
+        degree TEXT NOT NULL,
+        field_of_study TEXT,
+        start_date DATE,
+        end_date DATE,
+        gpa REAL,
+        description TEXT,
+        FOREIGN KEY (user_id) REFERENCES users (id)
+    )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    print("Database initialized successfully!")
+
+def clear_jobs_table():
+    """Clear all jobs from the database to prepare for fresh scraping."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM jobs")
+        conn.commit()
+        print("Jobs table cleared for fresh scraping.")
+    except sqlite3.Error as e:
+        print(f"Error clearing jobs table: {e}")
+        conn.rollback()  # Rollback any changes in case of error
+        raise  # Re-raise the exception to be handled upstream
+    finally:
+        conn.close()
+
+def clear_jobs_database():
+    """
+    Clear all jobs from the database before a new scraping session
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("DELETE FROM jobs")
+        conn.commit()
+        print("Jobs database cleared successfully")
+    except Exception as e:
+        print(f"Error clearing jobs database: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+        
+def save_job_to_db(job_data):
+    """Save a job to the database (alias for add_job for compatibility)."""
+    # Check if job with same title and company already exists to avoid duplicates
+    conn = get_db_connection()
+    cursor = conn.cursor()
+      # Process skills and clean job data
+    job_data_copy = job_data.copy()
+    skills_list = []
+    
+    # Ensure date_scraped is a proper datetime object
+    if 'date_scraped' in job_data_copy:
+        if isinstance(job_data_copy['date_scraped'], str):
+            try:
+                job_data_copy['date_scraped'] = datetime.strptime(job_data_copy['date_scraped'], '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                job_data_copy['date_scraped'] = datetime.utcnow()
+        elif not isinstance(job_data_copy['date_scraped'], datetime):
+            job_data_copy['date_scraped'] = datetime.utcnow()
+    
+    # Process skills
+    if 'skills' in job_data_copy:
+        if isinstance(job_data_copy['skills'], (list, tuple)):
+            skills_list = job_data_copy['skills']
+        elif isinstance(job_data_copy['skills'], str):
+            try:
+                skills_list = json.loads(job_data_copy['skills'])
+            except json.JSONDecodeError:
+                skills_list = [skill.strip() for skill in job_data_copy['skills'].split(',') if skill.strip()]
+        # Store skills separately and remove from job data
+        skills_list = list(set(skills_list))  # Remove duplicates
+        job_data_copy['skills'] = json.dumps(skills_list)  # Store as JSON string in jobs table
+    
+    # Ensure boolean fields are properly handled
+    boolean_fields = ['is_remote', 'is_new', 'is_urgent']
+    for field in boolean_fields:
+        if field in job_data_copy:
+            job_data_copy[field] = 1 if job_data_copy[field] else 0
+    
+    # Check for duplicates using source_url if available
+    if 'source_url' in job_data_copy:
+        cursor.execute("SELECT id FROM jobs WHERE source_url = ?", (job_data_copy['source_url'],))
+        existing_job = cursor.fetchone()
+        if existing_job:
+            job_id = existing_job[0]
+            # Update existing job's skills
+            if skills_list:
+                add_job_skills(job_id, skills_list)
+            conn.close()
+            return job_id
+    
+    # If no source_url or not found, check title and company
+    if 'title' in job_data_copy and 'company' in job_data_copy:
+        cursor.execute(
+            "SELECT id FROM jobs WHERE title = ? AND company = ?", 
+            (job_data_copy['title'], job_data_copy['company'])
+        )
+        existing_job = cursor.fetchone()
+        if existing_job:
+            job_id = existing_job[0]
+            # Update existing job's skills
+            if skills_list:
+                add_job_skills(job_id, skills_list)
+            conn.close()
+            return job_id
+    
+    conn.close()
+    return add_job(job_data_copy, skills_list)
+
+def add_job(job_data, skills_list=None):
+    """Add a job to the database."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Get column names from the job_data dictionary
+        columns = ', '.join(job_data.keys())
+        placeholders = ', '.join(['?' for _ in job_data])
+        values = list(job_data.values())
+        
+        query = f"INSERT INTO jobs ({columns}) VALUES ({placeholders})"
+        
+        cursor.execute(query, values)
+        job_id = cursor.lastrowid
+        
+        # Add skills to job_skills table if provided
+        if skills_list:
+            add_job_skills(job_id, skills_list)
+        
+        conn.commit()
+        return job_id
+    except sqlite3.Error as e:
+        print(f"Error adding job: {e}")
+        conn.rollback()
+        return None
+    finally:
+        conn.close()
+
+def add_job_skills(job_id, skills):
+    """Add skills for a specific job to the job_skills table."""
+    if not skills:
+        return
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # First delete any existing skills for this job
+        cursor.execute("DELETE FROM job_skills WHERE job_id = ?", (job_id,))
+        
+        # Insert new skills
+        for skill in skills:
+            cursor.execute(
+                "INSERT INTO job_skills (job_id, skill) VALUES (?, ?)",
+                (job_id, skill.strip())
+            )
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"Error adding job skills: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+def get_job_skills(job_id):
+    """Get all skills for a specific job."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT skill FROM job_skills WHERE job_id = ?", (job_id,))
+    skills = [row['skill'] for row in cursor.fetchall()]
+    conn.close()
+    return skills
+
+def get_all_unique_skills():
+    """Get a list of all unique skills from job_skills table."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT skill FROM job_skills ORDER BY skill")
+    skills = [row['skill'] for row in cursor.fetchall()]
+    conn.close()
+    return skills
+
+def get_all_jobs():
+    """Get all jobs from the database."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Get all jobs
+    cursor.execute("SELECT * FROM jobs")
+    
+    jobs = cursor.fetchall()
+    
+    # Convert Row objects to dictionaries
+    jobs_list = []
+    for job in jobs:
+        job_dict = dict(job)
+        
+        # Parse skills from JSON string if needed
+        if 'skills' in job_dict and isinstance(job_dict['skills'], str):
+            try:
+                job_dict['skills'] = json.loads(job_dict['skills'])
+            except json.JSONDecodeError:
+                # If not valid JSON, try splitting by comma
+                job_dict['skills'] = job_dict['skills'].split(',') if job_dict['skills'] else []
+        
+        jobs_list.append(job_dict)
+    
+    conn.close()
+    return jobs_list
+
+def search_jobs_db(query="All", location="All", resume_skills=None):
+    """Search jobs in the database with filtering and skill matching."""
+    conn = get_db_connection()
+    try:
+        # Enable datetime parsing from SQLite
+        conn.row_factory = sqlite3.Row
+        
+        # Normalize inputs
+        if location:
+            location = location.strip()
+        if resume_skills:
+            resume_skills = [skill.strip().lower() for skill in resume_skills]
+        
+        # Base query joining jobs with job_skills
+        base_query = '''
+        SELECT j.*, GROUP_CONCAT(js.skill) as job_skills,
+               strftime('%Y-%m-%d %H:%M:%S', j.date_scraped) as date_scraped_str
+        FROM jobs j
+        LEFT JOIN job_skills js ON j.id = js.job_id
+        '''
+        
+        where_clauses = []
+        params = []
+        
+        # Add search term filters if not "All"
+        if query.lower() != "all":
+            search_terms = [term.strip() for term in query.split()]
+            for search_term in search_terms:
+                where_clauses.append('''
+                (
+                    LOWER(j.title) LIKE ? OR
+                    LOWER(j.company) LIKE ? OR
+                    LOWER(j.description) LIKE ? OR
+                    EXISTS (
+                        SELECT 1 FROM job_skills js2 
+                        WHERE js2.job_id = j.id 
+                        AND LOWER(js2.skill) LIKE ?
+                    )
+                )
+                ''')
+                search_pattern = f'%{search_term.lower()}%'
+                params.extend([search_pattern, search_pattern, search_pattern, search_pattern])
+          # Add location filter if not "All"
+        if location.lower() != "all":
+            # Split location into city and state/country if provided
+            location_parts = [part.strip().lower() for part in location.split(',')]
+            location_clause = []
+            for part in location_parts:
+                location_clause.append('(LOWER(j.location) LIKE ? OR LOWER(j.location) = ?)')
+                params.extend([f'%{part}%', part])  # Add both fuzzy and exact match parameters
+            where_clauses.append('(' + ' OR '.join(location_clause) + ')')
+        
+        # Add WHERE clause if we have conditions
+        if where_clauses:
+            base_query += ' WHERE ' + ' AND '.join(where_clauses)
+        
+        # Group by job_id to combine skills
+        base_query += ' GROUP BY j.id'
+        
+        # Execute query and fetch results
+        cursor = conn.execute(base_query, params)
+        jobs = cursor.fetchall()
+          # Process results and calculate skill matches
+        job_list = []
+        for job in jobs:
+            job_dict = dict(job)
+            
+            # Initialize match percentage early
+            match_percentage = 0
+              # Convert date_scraped_str to datetime object if it exists
+            if 'date_scraped_str' in job_dict:
+                try:
+                    job_dict['date_scraped'] = datetime.strptime(job_dict['date_scraped_str'], '%Y-%m-%d %H:%M:%S')
+                    del job_dict['date_scraped_str']  # Remove the string version
+                except (ValueError, TypeError):
+                    job_dict['date_scraped'] = None
+            
+            # Get job skills from either job_skills table or skills column
+            job_skills = set()
+            
+            # Add skills from job_skills table
+            if job_dict.get('job_skills'):
+                job_skills.update(skill.strip() for skill in job_dict['job_skills'].split(','))
+            
+            # Add skills from skills column (if any)
+            if job_dict.get('skills'):
+                try:
+                    skills_from_column = json.loads(job_dict['skills'])
+                    if isinstance(skills_from_column, list):
+                        job_skills.update(skill.strip().lower() for skill in skills_from_column)
+                    elif isinstance(skills_from_column, str):
+                        job_skills.update(skill.strip().lower() for skill in skills_from_column.split(','))
+                except json.JSONDecodeError:
+                    skills_from_column = job_dict['skills'].split(',')
+                    job_skills.update(skill.strip().lower() for skill in skills_from_column)
+            
+            # Clean and normalize job skills
+            job_skills = {s for s in job_skills if s and len(s) >= 2}
+            job_dict['skills'] = sorted(job_skills)
+              # Calculate skill matches if resume_skills provided
+            if resume_skills:
+                resume_skills_lower = [skill.lower() for skill in resume_skills]
+                matching_skills = [skill for skill in job_skills if skill in resume_skills_lower]
+                missing_skills = [skill for skill in job_skills if skill not in resume_skills_lower]
+                
+                # Calculate match percentage
+                total_job_skills = len(job_skills)
+                if total_job_skills > 0:
+                    match_percentage = (len(matching_skills) / total_job_skills) * 100
+                else:
+                    match_percentage = 0
+                
+                # Only include jobs that have at least one matching skill
+                if len(matching_skills) > 0:
+                    job_dict.update({
+                        'matching_resume_skills': len(matching_skills),
+                        'match_percentage': round(match_percentage),
+                        'matching_skills': matching_skills,
+                        'missing_skills': missing_skills,
+                        'total_required_skills': total_job_skills
+                    })
+                    job_list.append(job_dict)
+            else:
+                job_list.append(job_dict)
+            
+            job_list.append(job_dict)
+        
+        # Sort jobs by match percentage if resume skills provided
+        if resume_skills:
+            job_list.sort(key=lambda x: (
+                x.get('match_percentage', 0),
+                x.get('matching_resume_skills', 0),
+                len(x.get('skills', [])),
+                x.get('title', '')
+            ), reverse=True)
+        
+        return job_list
+    finally:
+        if conn:
+            conn.close()
+
+def get_job_by_id(job_id):
+    """Get a job by its ID."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
+    job = cursor.fetchone()
+    
+    if job:
+        job_dict = dict(job)
+        
+        # Parse skills from JSON string if needed
+        if 'skills' in job_dict and isinstance(job_dict['skills'], str):
+            try:
+                job_dict['skills'] = json.loads(job_dict['skills'])
+            except json.JSONDecodeError:
+                # If not valid JSON, try splitting by comma
+                job_dict['skills'] = job_dict['skills'].split(',') if job_dict['skills'] else []
+        
+        conn.close()
+        return job_dict
+    
+    conn.close()
+    return None
+
+def add_work_experience(user_id, company, title, start_date, end_date=None, description=None, current_job=False):
+    """Add a work experience entry for a user."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    INSERT INTO work_experience (user_id, company, title, start_date, end_date, description, current_job)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (user_id, company, title, start_date, end_date, description, current_job))
+    
+    exp_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return exp_id
+
+def update_work_experience(exp_id, user_id, company, title, start_date, end_date=None, description=None, current_job=False):
+    """Update a work experience entry."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    UPDATE work_experience 
+    SET company = ?, title = ?, start_date = ?, end_date = ?, description = ?, current_job = ?
+    WHERE id = ? AND user_id = ?
+    ''', (company, title, start_date, end_date, description, current_job, exp_id, user_id))
+    
+    success = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return success
+
+def delete_work_experience(exp_id, user_id):
+    """Delete a work experience entry."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('DELETE FROM work_experience WHERE id = ? AND user_id = ?', (exp_id, user_id))
+    
+    success = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return success
+
+def get_user_work_experience(user_id):
+    """Get all work experience entries for a user."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT * FROM work_experience WHERE user_id = ? ORDER BY start_date DESC', (user_id,))
+    experiences = cursor.fetchall()
+    
+    conn.close()
+    return [dict(exp) for exp in experiences]
+
+def add_education(user_id, institution, degree, field_of_study=None, start_date=None, 
+                 end_date=None, gpa=None, description=None):
+    """Add an education entry for a user."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    INSERT INTO education (user_id, institution, degree, field_of_study, 
+                         start_date, end_date, gpa, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (user_id, institution, degree, field_of_study, 
+          start_date, end_date, gpa, description))
+    
+    edu_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return edu_id
+
+def update_education(edu_id, user_id, institution, degree, field_of_study=None, 
+                    start_date=None, end_date=None, gpa=None, description=None):
+    """Update an education entry."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    UPDATE education 
+    SET institution = ?, degree = ?, field_of_study = ?, 
+        start_date = ?, end_date = ?, gpa = ?, description = ?
+    WHERE id = ? AND user_id = ?
+    ''', (institution, degree, field_of_study, start_date, 
+          end_date, gpa, description, edu_id, user_id))
+    
+    success = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return success
+
+def delete_education(edu_id, user_id):
+    """Delete an education entry."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('DELETE FROM education WHERE id = ? AND user_id = ?', (edu_id, user_id))
+    
+    success = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return success
+
+def get_user_education(user_id):
+    """Get all education entries for a user."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT * FROM education WHERE user_id = ? ORDER BY start_date DESC', (user_id,))
+    education = cursor.fetchall()
+    
+    conn.close()
+    return [dict(edu) for edu in education]
+
+def update_user_profile(user_id, username=None, email=None, skills=None, 
+                       certifications=None, summary=None):
+    """Update a user's profile information."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    update_fields = []
+    params = []
+    
+    if username is not None:
+        update_fields.append('username = ?')
+        params.append(username)
+    if email is not None:
+        update_fields.append('email = ?')
+        params.append(email)
+    if skills is not None:
+        update_fields.append('skills = ?')
+        params.append(skills)
+    if certifications is not None:
+        update_fields.append('certifications = ?')
+        params.append(certifications)
+    if summary is not None:
+        update_fields.append('summary = ?')
+        params.append(summary)
+    
+    if update_fields:
+        params.append(user_id)
+        query = f'''
+        UPDATE users 
+        SET {', '.join(update_fields)}
+        WHERE id = ?
+        '''
+        cursor.execute(query, params)
+        
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+    
+    conn.close()
+    return False
+
+# If this file is run directly, initialize the database
+if __name__ == "__main__":
+    init_db()
+    print("Database initialized. No sample jobs added.")

@@ -1,18 +1,31 @@
 {% extends "base.html" %}
+{% from "components/job_card.html" import render_job_card %}
 {% block title %}Jobs - Job Recommender{% endblock %}
+
 {% block content %}
-<div class="container mt-4">
-    <!-- Hidden inputs to store values for debugging -->
+<div class="container mx-auto px-4 py-8 max-w-7xl">
+    <!-- Hidden inputs for debugging and state management -->
     <input type="hidden" id="query-value" value="{{ query }}">
     <input type="hidden" id="location-value" value="{{ location }}">
     <input type="hidden" id="run-scraper-flag" value="{{ 'true' if run_scraper else 'false' }}">
-
-    <!-- Loading indicator (initially shown if run_scraper is true) -->
-    <div id="loading-container" class="text-center py-5" {% if not run_scraper %}style="display: none;"{% endif %}>
-        <div class="spinner-border text-primary" role="status">
-            <span class="sr-only">Loading...</span>
+    
+    <!-- Loading indicators -->
+    <div id="search-loading" class="loading-container" style="display: none;">
+        <div class="loading-spinner">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="loading-message">Searching for jobs...</p>
         </div>
-        <p class="mt-3">Scraping for fresh job listings. Please wait...</p>
+    </div>
+    
+    <div id="scrape-loading" class="loading-container" style="display: none;">
+        <div class="loading-spinner">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="loading-message">Fetching new jobs...</p>
+        </div>
     </div>
 
     <!-- Jobs content (initially hidden if run_scraper is true) -->
@@ -22,9 +35,12 @@
                 <h1>Job Listings</h1>
                 <p class="text-muted">
                     {% if query != "All" or location != "All" %}
-                        Showing results for "{{ query }}" in "{{ location }}"
+                        Showing results for "{{ query }}" {% if location != "All" %}in "{{ location }}"{% endif %}
                     {% else %}
                         Showing all available jobs
+                    {% endif %}
+                    {% if jobs %}
+                        <span class="badge bg-secondary ms-2">{{ jobs|length }} jobs found</span>
                     {% endif %}
                     
                     {% if resume_skills %}
@@ -35,12 +51,16 @@
                 </p>
             </div>
             <div class="col-md-4 text-end">
-                <a href="{{ url_for('index') }}" class="btn btn-outline-primary">
-                    <i class="bi bi-search me-1"></i>New Search
+                <a href="{{ url_for('scrape_jobs_with_profile') }}" class="btn btn-primary" id="search-profile-btn">
+                    <i class="bi bi-person-check me-1"></i>
+                    <span class="btn-text">Search Using My Profile</span>
+                    <span class="spinner-border spinner-border-sm d-none" role="status"></span>
                 </a>
             </div>
         </div>
-
+        
+       
+        
         {% if resume_skills %}
         <div class="row mb-4">
             <div class="col-12">
@@ -63,298 +83,214 @@
         </div>
         {% endif %}
 
+        <!-- Job listings -->
         <div class="row" id="jobs-container">
             {% if jobs %}
                 {% for job in jobs %}
                 <div class="col-md-6 mb-4">
-                    <div class="card h-100 {% if resume_skills and job.matching_resume_skills > 0 %}border-success{% endif %}">
-                        {% if resume_skills and job.matching_resume_skills > 0 %}
-                        <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
-                            <span>
-                                <i class="bi bi-check-circle me-1"></i>
-                                {{ job.matching_resume_skills }} matching skills
-                            </span>
-                            <span class="badge bg-light text-dark">{{ (job.matching_resume_skills / resume_skills|length * 100)|round }}% match</span>
-                        </div>
-                        {% endif %}
+                    <div class="card h-100 border-0 shadow-sm job-card" data-match-percentage="{{ job.match_percentage|default(0) }}">
                         <div class="card-body">
-                            <h5 class="card-title">{{ job.title }}</h5>
-                            <h6 class="card-subtitle mb-2 text-muted">{{ job.company }}</h6>
-                            <p class="card-text">
-                                <i class="bi bi-geo-alt me-1"></i>{{ job.location }}<br>
-                                {% if job.salary %}
-                                <i class="bi bi-cash me-1"></i>{{ job.salary }}<br>
-                                {% endif %}
-                                {% if job.job_type %}
-                                <i class="bi bi-briefcase me-1"></i>{{ job.job_type }}
-                                {% endif %}
-                            </p>
-                            <p class="card-text">{{ job.snippet }}</p>
-                            
-                            {% if job.skills %}
-                            <div class="mb-3">
-                                <strong>Skills:</strong>
-                                <div class="d-flex flex-wrap gap-1 mt-1">
-                                    {% for skill in job.skills %}
-                                    <span class="badge {% if resume_skills and skill in resume_skills %}bg-success{% else %}bg-secondary{% endif %}">
-                                        {{ skill }}
-                                    </span>
-                                    {% endfor %}
+                            <!-- Job Header -->
+                            <div class="d-flex justify-content-between align-items-start mb-3">
+                                <div>
+                                    <h5 class="card-title mb-1">{{ job.title }}</h5>
+                                    <h6 class="text-muted mb-0">{{ job.company }}</h6>
                                 </div>
+                                {% if job.match_percentage is defined %}
+                                <span class="badge bg-{{ 'success' if job.match_percentage >= 70 else 'warning' if job.match_percentage >= 40 else 'danger' }} rounded-pill">
+                                    {{ job.match_percentage }}% Match
+                                </span>
+                                {% endif %}
                             </div>
-                            {% endif %}
-                            
-                            <div class="d-flex justify-content-between align-items-center mt-3">
+
+                            <!-- Job Details -->
+                            <div class="d-flex flex-wrap gap-2 mb-3">
+                                {% if job.location %}
+                                <span class="badge bg-light text-dark border">
+                                    <i class="bi bi-geo-alt me-1"></i>{{ job.location }}
+                                </span>
+                                {% endif %}
+                                {% if job.employment_type %}
+                                <span class="badge bg-info">
+                                    <i class="bi bi-briefcase me-1"></i>{{ job.employment_type|title }}
+                                </span>
+                                {% endif %}
+                                {% if job.is_remote %}
+                                <span class="badge bg-primary">
+                                    <i class="bi bi-laptop me-1"></i>Remote
+                                </span>
+                                {% endif %}
+                                {% if job.is_new %}
+                                <span class="badge bg-warning text-dark">
+                                    <i class="bi bi-star-fill me-1"></i>New
+                                </span>
+                                {% endif %}
+                            </div>
+
+                            <!-- Description -->
+                            <p class="card-text text-muted small mb-3">
+                                {{ job.description[:200] + '...' if job.description|length > 200 else job.description }}
+                            </p>
+
+                            <!-- Skills Section -->
+                            <div class="skills-section mb-3">
+                                <!-- Required Skills -->                                {% set required_skills = job.required_skills|from_json %}
+                                {% if required_skills %}
+                                <div class="mb-2">
+                                    <h6 class="small fw-bold mb-2">
+                                        <i class="bi bi-check-circle-fill me-1 text-primary"></i>Required Skills
+                                        {% if user_skills and job.matching_required_skills|from_json %}
+                                        <span class="text-success ms-1">
+                                            ({{ job.matching_required_skills|from_json|length }}/{{ required_skills|length }})
+                                        </span>
+                                        {% endif %}
+                                    </h6>
+                                    <div class="d-flex flex-wrap gap-2">
+                                        {% for skill in required_skills %}                                            {% if user_skills and skill in (job.matching_required_skills|from_json) %}
+                                            <span class="badge bg-success">
+                                                <i class="bi bi-check-circle-fill me-1"></i>{{ skill }}
+                                            </span>
+                                            {% else %}
+                                            <span class="badge bg-secondary">{{ skill }}</span>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                                {% endif %}
+
+                                <!-- Nice to Have Skills -->                                {% set nice_to_have_skills = job.nice_to_have_skills|from_json %}
+                                {% if nice_to_have_skills %}
+                                <div class="mb-2">
+                                    <h6 class="small fw-bold mb-2">
+                                        <i class="bi bi-plus-circle me-1 text-info"></i>Nice to Have
+                                        {% if user_skills and job.matching_nice_to_have_skills|from_json %}
+                                        <span class="text-info ms-1">
+                                            ({{ job.matching_nice_to_have_skills|from_json|length }}/{{ nice_to_have_skills|length }})
+                                        </span>
+                                        {% endif %}
+                                    </h6>
+                                    <div class="d-flex flex-wrap gap-2">
+                                        {% for skill in nice_to_have_skills %}                                            {% if user_skills and skill in (job.matching_nice_to_have_skills|from_json) %}
+                                            <span class="badge bg-info">
+                                                <i class="bi bi-check-circle-fill me-1"></i>{{ skill }}
+                                            </span>
+                                            {% else %}
+                                            <span class="badge bg-light text-dark border">{{ skill }}</span>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                                {% endif %}
+
+                                <!-- Missing Skills - Skill Gaps -->                                {% set missing_skills = job.missing_skills|from_json %}
+                                {% if user_skills and missing_skills %}
+                                <div class="mt-2">
+                                    <h6 class="small fw-bold mb-2 text-warning">
+                                        <i class="bi bi-exclamation-circle me-1"></i>Skills to Develop
+                                    </h6>
+                                    <div class="d-flex flex-wrap gap-2">
+                                        {% for skill in missing_skills %}
+                                        <span class="badge bg-warning text-dark">{{ skill }}</span>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Footer -->
+                            <div class="d-flex justify-content-between align-items-center mt-auto">
                                 <small class="text-muted">
-                                    <i class="bi bi-calendar me-1"></i>{{ job.date_posted }}
+                                    <i class="bi bi-calendar me-1"></i>{{ job.date_posted or job.date_scraped }}
                                 </small>
-                                <a href="{{ job.url }}" target="_blank" class="btn btn-primary">
-                                    <i class="bi bi-box-arrow-up-right me-1"></i>Apply
-                                </a>
+                                <div>
+                                    {% if job.url %}
+                                    <a href="{{ job.url }}" target="_blank" class="btn btn-primary btn-sm">
+                                        <i class="bi bi-box-arrow-up-right me-1"></i>Apply
+                                    </a>
+                                    {% endif %}
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
                 {% endfor %}
             {% else %}
-                <div class="col-12" id="no-jobs-message">
+                <div class="col-12">
                     <div class="alert alert-info">
                         <i class="bi bi-info-circle me-2"></i>
-                        No jobs found matching your criteria. Try broadening your search.
+                        No jobs found matching your criteria. Try broadening your search or 
+                        {% if not resume_skills %}
+                        <a href="{{ url_for('upload_resume') }}" class="alert-link">upload your resume</a> 
+                        to find better matches.
+                        {% else %}
+                        updating your search criteria.
+                        {% endif %}
                     </div>
                 </div>
             {% endif %}
         </div>
+
+        <!-- Course Recommendations Section -->
+        <div class="mt-4">
+            <div class="card">
+                <div class="card-header bg-light">
+                    <h4 class="mb-0"><i class="bi bi-mortarboard me-2"></i>Skill Development</h4>
+                </div>
+                <div class="card-body">
+                    {% if missing_skills %}
+                    <p class="mb-3">Improve your job matches by developing these skills:</p>
+                    <div class="d-flex flex-wrap gap-2 mb-4">
+                        {% for skill in missing_skills[:8] %}
+                        <span class="badge bg-warning text-dark">{{ skill }}</span>
+                        {% endfor %}
+                        {% if missing_skills|length > 8 %}
+                        <span class="badge bg-light text-dark">+{{ missing_skills|length - 8 }} more</span>
+                        {% endif %}
+                    </div>
+                    
+                    <!-- Course Recommendations Cards -->
+                    {% if course_recommendations %}
+                    <div class="row row-cols-1 row-cols-md-2 g-4 mb-4">
+                        {% for skill, courses in course_recommendations.items() %}
+                            {% for course in courses[:1] %}  <!-- Show only the first course for each skill -->
+                            <div class="col">
+                                <div class="card h-100 border-0 shadow-sm">
+                                    {% if course.image %}
+                                    <img src="{{ course.image }}" class="card-img-top" alt="{{ course.name }}">
+                                    {% endif %}
+                                    <div class="card-body">
+                                        <h5 class="card-title">{{ course.name }}</h5>
+                                        <p class="text-muted small mb-2">
+                                            <i class="bi bi-tag me-1"></i>{{ course.level }} ·
+                                            <i class="bi bi-clock ms-2 me-1"></i>{{ course.workload }}
+                                        </p>
+                                        <p class="card-text small">{{ course.description }}</p>
+                                    </div>
+                                    <div class="card-footer bg-transparent text-end border-0">
+                                        <a href="{{ course.link }}" target="_blank" class="btn btn-primary btn-sm">
+                                            <i class="bi bi-arrow-up-right me-1"></i>View Course
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    
+                    <a href="{{ url_for('course_recommendations') }}" class="btn btn-primary">
+                        <i class="bi bi-book me-1"></i>View All Course Recommendations
+                    </a>
+                    {% else %}
+                    <p class="text-muted mb-0">Great job! Your skills match well with the available positions.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
     </div>
 </div>
+{% endblock %}
 
-
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    {% if run_scraper %}
-    // Run the scraper when the page loads
-    const loadingContainer = document.getElementById('loading-container');
-    const jobsContent = document.getElementById('jobs-content');
-    const jobsContainer = document.getElementById('jobs-container');
-    
-    // Create form data with query and location
-    const formData = new FormData();
-    formData.append('query', '{{ query }}');
-    formData.append('location', '{{ location }}');
-    
-    // Show loading indicator
-    loadingContainer.style.display = 'block';
-    jobsContent.style.display = 'none';
-    
-    console.log('Running scraper with query:', '{{ query }}', 'location:', '{{ location }}');
-    
-    // Send AJAX request to run scraper
-    fetch('/run_scraper_api', {
-        method: 'POST',
-        body: formData,
-        credentials: 'same-origin'
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-        return response.json();
-    })
-    .then(data => {
-        console.log('Scraper API response:', data); // Debug output
-        
-        // Hide loading indicator
-        loadingContainer.style.display = 'none';
-        jobsContent.style.display = 'block';
-        
-        if (data.status === 'success') {
-            if (data.jobs && data.jobs.length > 0) {
-                console.log(`Found ${data.jobs.length} jobs`);
-                
-                // Clear existing jobs
-                jobsContainer.innerHTML = '';
-                
-                // Add jobs to the container
-                data.jobs.forEach(job => {
-                    console.log('Processing job:', job.title, 'at', job.company);
-                    const jobCard = createJobCard(job);
-                    jobsContainer.appendChild(jobCard);
-                });
-            } else {
-                console.log('No jobs found in API response');
-                // No jobs found
-                jobsContainer.innerHTML = `
-                    <div class="col-12">
-                        <div class="alert alert-info">
-                            <i class="bi bi-info-circle me-2"></i>
-                            No jobs found matching your criteria. Try broadening your search.
-                        </div>
-                    </div>
-                `;
-            }
-        } else {
-            console.error('API returned error:', data.message);
-            // Error message
-            jobsContainer.innerHTML = `
-                <div class="col-12">
-                    <div class="alert alert-danger">
-                        <i class="bi bi-exclamation-triangle me-2"></i>
-                        ${data.message || 'An error occurred while scraping jobs. Please try again.'}
-                    </div>
-                </div>
-            `;
-        }
-    })
-    .catch(error => {
-        console.error('Fetch error:', error);
-        // Hide loading indicator and show error
-        loadingContainer.style.display = 'none';
-        jobsContent.style.display = 'block';
-        jobsContainer.innerHTML = `
-            <div class="col-12">
-                <div class="alert alert-danger">
-                    <i class="bi bi-exclamation-triangle me-2"></i>
-                    An error occurred: ${error.message}. Please try again.
-                </div>
-            </div>
-        `;
-    });
-    {% endif %}
-    
-    // Function to create a job card
-    function createJobCard(job) {
-        console.log('Creating card for job:', job.title);
-        
-        const col = document.createElement('div');
-        col.className = 'col-md-6 mb-4';
-        
-        // Calculate match percentage if resume skills are available
-        let matchPercentage = 0;
-        let matchingSkillsCount = 0;
-        const resumeSkills = {{ resume_skills|tojson }};
-        
-        if (resumeSkills && resumeSkills.length > 0) {
-            // Check all possible properties where matching skills might be stored
-            if (job.matching_skills && Array.isArray(job.matching_skills)) {
-                matchingSkillsCount = job.matching_skills.length;
-            } else if (typeof job.matching_resume_skills === 'number') {
-                matchingSkillsCount = job.matching_resume_skills;
-            } else if (job.match_percentage) {
-                matchPercentage = job.match_percentage;
-                // If we have percentage but not count, estimate count
-                if (!matchingSkillsCount) {
-                    matchingSkillsCount = Math.round((matchPercentage / 100) * resumeSkills.length);
-                }
-            }
-            
-            // Calculate percentage if we only have count
-            if (matchingSkillsCount > 0 && !matchPercentage) {
-                matchPercentage = Math.round((matchingSkillsCount / resumeSkills.length) * 100);
-            }
-        }
-        
-        // Create card header for matching skills
-        let cardHeaderHtml = '';
-        if (resumeSkills && resumeSkills.length > 0 && matchingSkillsCount > 0) {
-            cardHeaderHtml = `
-                <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
-                    <span>
-                        <i class="bi bi-check-circle me-1"></i>
-                        ${matchingSkillsCount} matching skills
-                    </span>
-                    <span class="badge bg-light text-dark">${matchPercentage}% match</span>
-                </div>
-            `;
-        }
-        
-        // Ensure job.skills is an array
-        let jobSkills = [];
-        if (job.skills) {
-            if (Array.isArray(job.skills)) {
-                jobSkills = job.skills;
-            } else if (typeof job.skills === 'string') {
-                try {
-                    // Try parsing as JSON
-                    jobSkills = JSON.parse(job.skills);
-                } catch (e) {
-                    // If parsing fails, treat as comma-separated string
-                    jobSkills = job.skills.split(',').map(s => s.trim()).filter(s => s);
-                }
-            }
-        }
-        
-        console.log('Job skills:', jobSkills);
-        
-        // Format skills badges
-        let skillsHtml = '';
-        if (jobSkills && jobSkills.length > 0) {
-            const skillBadges = jobSkills.map(skill => {
-                if (!skill) return '';
-                
-                const isMatchingSkill = resumeSkills && resumeSkills.some(s => 
-                    s.toLowerCase() === (typeof skill === 'string' ? skill.toLowerCase() : String(skill).toLowerCase())
-                );
-                
-                return `
-                    <span class="badge ${isMatchingSkill ? 'bg-success' : 'bg-secondary'}">
-                        ${skill}
-                    </span>
-                `;
-            }).join('');
-            
-            skillsHtml = `
-                <div class="mb-3">
-                    <strong>Skills:</strong>
-                    <div class="d-flex flex-wrap gap-1 mt-1">
-                        ${skillBadges}
-                    </div>
-                </div>
-            `;
-        }
-        
-        // Get snippet or description
-        let snippetText = 'No description available';
-        if (job.snippet) {
-            snippetText = job.snippet;
-        } else if (job.description) {
-            snippetText = typeof job.description === 'string' && job.description.length > 150 
-                ? job.description.substring(0, 150) + '...' 
-                : job.description;
-        }
-        
-        // Create the card HTML
-        col.innerHTML = `
-            <div class="card h-100 ${(resumeSkills && matchingSkillsCount > 0) ? 'border-success' : ''}">
-                ${cardHeaderHtml}
-                <div class="card-body">
-                    <h5 class="card-title">${job.title || 'Untitled Position'}</h5>
-                    <h6 class="card-subtitle mb-2 text-muted">${job.company || 'Unknown Company'}</h6>
-                    <p class="card-text">
-                        <i class="bi bi-geo-alt me-1"></i>${job.location || 'Location not specified'}<br>
-                        ${job.salary ? `<i class="bi bi-cash me-1"></i>${job.salary}<br>` : ''}
-                        ${job.job_type ? `<i class="bi bi-briefcase me-1"></i>${job.job_type}` : ''}
-                    </p>
-                    <p class="card-text">${snippetText}</p>
-                    
-                    ${skillsHtml}
-                    
-                    <div class="d-flex justify-content-between align-items-center mt-3">
-                        <small class="text-muted">
-                            <i class="bi bi-calendar me-1"></i>${job.date_posted || 'Recently posted'}
-                        </small>
-                        ${job.url ? `
-                            <a href="${job.url}" target="_blank" class="btn btn-primary">
-                                <i class="bi bi-box-arrow-up-right me-1"></i>Apply
-                            </a>
-                        ` : ''}
-                    </div>
-                </div>
-            </div>
-        `;
-        
-        return col;
-    }
-});
-</script>
-
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/jobs.js') }}"></script>
 {% endblock %}
