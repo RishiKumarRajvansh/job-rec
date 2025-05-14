@@ -40,13 +40,17 @@
         </div>
 
         <div class="col-md-8">
-            {% if missing_skills and course_recommendations %}
+            {% if course_recommendations %}
             <div class="course-recommendations">
                 {% for skill, courses in course_recommendations.items() %}
                 <div class="card mb-4">
                     <div class="card-header">
                         <h5 class="mb-0">
-                            <span class="badge bg-secondary me-2">{{ skill }}</span>
+                            {% if skill in missing_skills %}
+                            <span class="badge bg-warning text-dark me-2">{{ skill }}</span>
+                            {% else %}
+                            <span class="badge bg-success me-2">{{ skill }}</span>
+                            {% endif %}
                             Recommended Courses
                         </h5>
                     </div>
@@ -74,10 +78,6 @@
                     </div>
                 </div>
                 {% endfor %}
-            </div>
-            {% elif not missing_skills %}
-            <div class="alert alert-success">
-                <i class="bi bi-check-circle-fill me-2"></i>Great job! You have all the skills currently in demand.
             </div>
             {% else %}
             <div class="alert alert-info">

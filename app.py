@@ -503,12 +503,11 @@ def list_all_jobs():
     location = request.args.get('location', 'All')
     run_scraper = request.args.get('run_scraper', 'false').lower() == 'true'
     force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
-    
-    # Get user's skills from session and profile
+      # Get user's skills from session and profile
     resume_skills = []
     
-    # Get skills from session
-    session_skills = session.get('resume_skills', [])
+    # Get skills from user-specific session key
+    session_skills = session.get(f'user_{current_user.id}_resume_skills', [])
     if session_skills:
         if isinstance(session_skills, str):
             resume_skills.extend(s.strip() for s in session_skills.split(',') if s.strip())
@@ -647,9 +646,8 @@ def list_all_jobs():
 
     # Convert missing_skills_set back to a sorted list for template
     missing_skills = sorted(list(missing_skills_set))
-    
-    # Store missing skills in session for use in course recommendations
-    session['missing_skills'] = missing_skills    # If we have missing skills, fetch course recommendations
+      # Store missing skills in session for use in course recommendations, using user-specific key
+    session[f'user_{current_user.id}_missing_skills'] = missing_skills# If we have missing skills, fetch course recommendations
     course_recommendations = {}
     if missing_skills:
         try:
@@ -704,10 +702,9 @@ def upload_resume():
                     session.pop('missing_skills')
                   # Clean and validate skills
                 cleaned_skills = [skill.strip() for skill in resume_data['skills'] if skill.strip()]
-                
-                # Update session with fresh skills
-                session['resume_skills'] = cleaned_skills
-                session['last_resume_update'] = datetime.utcnow().isoformat()
+                  # Update session with fresh skills using user-specific keys
+                session[f'user_{current_user.id}_resume_skills'] = cleaned_skills
+                session[f'user_{current_user.id}_last_resume_update'] = datetime.utcnow().isoformat()
                 
                 # Update user profile with all resume data
                 current_user.resume_skills = ','.join(cleaned_skills)  # Store as comma-separated string
@@ -803,26 +800,46 @@ def course_recommendations():
     user_skills = []
     if current_user.skills:
         user_skills = [skill.strip() for skill in current_user.skills.split(',')]
-    resume_skills = session.get('resume_skills', [])
+    
+    # Get skills from user-specific session key
+    session_skills = session.get(f'user_{current_user.id}_resume_skills', [])
+    if session_skills:
+        if isinstance(session_skills, str):
+            resume_skills = [s.strip() for s in session_skills.split(',')]
+        else:
+            resume_skills = session_skills
+    else:
+        resume_skills = []
     
     # Combine user's profile skills and resume skills
     all_skills = list(set(user_skills + resume_skills))
     
-    # Get missing skills from session
-    missing_skills = session.get('missing_skills', [])
+    # Get missing skills from user-specific session key
+    missing_skills = session.get(f'user_{current_user.id}_missing_skills', [])
     
-    # Get course recommendations based on missing skills first, then other skills
-    priority_skills = missing_skills if missing_skills else all_skills
-    course_recommendations = fetch_courses_by_skills(priority_skills)
+    # Initialize course recommendations dictionary
+    course_recommendations = {}
     
-    # If we have space for more recommendations and have skills that aren't missing,
+    # First, get recommendations for missing skills
+    if missing_skills:
+        try:
+            course_recommendations = fetch_courses_by_skills(missing_skills)
+        except Exception as e:
+            print(f"Error fetching course recommendations for missing skills: {e}")
+    
+    # If we have space for more recommendations or no missing skills,
     # add courses for existing skills as well
-    if missing_skills and len(course_recommendations) < len(missing_skills) * 5:
-        additional_courses = fetch_courses_by_skills([s for s in all_skills if s not in missing_skills])
-        # Add non-duplicate courses
-        for skill, courses in additional_courses.items():
-            if skill not in course_recommendations:
-                course_recommendations[skill] = courses
+    if not missing_skills or len(course_recommendations) < len(all_skills) * 3:
+        existing_skills = [s for s in all_skills if s not in missing_skills]
+        if existing_skills:
+            try:
+                additional_courses = fetch_courses_by_skills(existing_skills)
+                # Add non-duplicate courses
+                for skill, courses in additional_courses.items():
+                    if skill not in course_recommendations:
+                        course_recommendations[skill] = courses
+            except Exception as e:
+                print(f"Error fetching additional course recommendations: {e}")
     
     return render_template(
         'course_recommendations.html',
