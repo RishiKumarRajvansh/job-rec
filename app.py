@@ -966,7 +966,6 @@ def upload_resume():
                     for edu in resume_data['education']:
                         start_date = datetime.strptime(edu['start_date'], '%m/%Y') if edu.get('start_date') else None
                         end_date = datetime.strptime(edu['end_date'], '%m/%Y') if edu.get('end_date') else None
-                        
                         add_education(
                             user_id=current_user.id,
                             institution=edu['institution'],
@@ -981,7 +980,7 @@ def upload_resume():
                 db.session.commit()
                 
                 flash('Resume uploaded and all information updated successfully!', 'success')
-                return redirect(url_for('list_all_jobs'))
+                return redirect(url_for('profile'))
             else:
                 flash('No skills found in resume. Please update your profile manually.', 'warning')
                 return redirect(url_for('profile'))

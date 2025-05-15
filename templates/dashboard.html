@@ -4,55 +4,57 @@
 <div class="container-fluid">
     <div class="row">
         <!-- Sidebar -->
-        <nav id="sidebar" class="col-md-3 col-lg-2 d-md-block bg-light sidebar">
+        <nav id="sidebar" class="col-md-2 col-lg-2 d-md-block bg-light sidebar">
             <div class="position-sticky pt-3">
                 <ul class="nav flex-column">
                     <li class="nav-item">
-                        <a class="nav-link {{ 'active' if active_page == 'dashboard' }}" href="{{ url_for('dashboard') }}">
+                        <a class="nav-link {{ 'active' if active_page == 'dashboard' }} hover-effect" href="{{ url_for('dashboard') }}">
                             <i class="bi bi-speedometer2 me-2"></i>
                             Dashboard
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link {{ 'active' if active_page == 'profile' }}" href="{{ url_for('profile') }}">
+                        <a class="nav-link {{ 'active' if active_page == 'profile' }} hover-effect" href="{{ url_for('profile') }}">
                             <i class="bi bi-person me-2"></i>
                             Profile
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link {{ 'active' if active_page == 'jobs' }}" href="{{ url_for('list_all_jobs') }}">
+                        <a class="nav-link {{ 'active' if active_page == 'jobs' }} hover-effect" href="{{ url_for('list_all_jobs') }}">
                             <i class="bi bi-briefcase me-2"></i>
                             Jobs
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link {{ 'active' if active_page == 'course_recommendations' }}" href="{{ url_for('course_recommendations') }}">
+                        <a class="nav-link {{ 'active' if active_page == 'course_recommendations' }} hover-effect" href="{{ url_for('course_recommendations') }}">
                             <i class="bi bi-mortarboard me-2"></i>
                             Course Recommendations
                         </a>
                     </li>
                 </ul>
             </div>
-        </nav>
-
-        <!-- Main content -->
-        <main class="col-md-9 ms-sm-auto col-lg-10 px-md-4">
+        </nav>        <!-- Main content -->
+        <main class="col-md-10 ms-sm-auto col-lg-10 px-md-4">
             <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
-                <h1 class="h2">Welcome, {{ current_user.username }}!</h1>            </div>
-              <!-- No refresh button needed -->
-
-            <!-- Quick Stats Cards -->
-            <div class="row mb-4">
+                <h1 class="h2">Welcome, {{ current_user.username }}!</h1>
+                <div class="btn-toolbar mb-2 mb-md-0">
+                    <button type="button" onclick="location.reload();" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                    </button>
+                </div>
+            </div>
+              <!-- Improved layout -->            <!-- Quick Stats Cards -->
+            <div class="row mb-4 g-3">
                 <!-- Profile Stats -->
-                <div class="col-md-3">
-                    <div class="card h-100 border-0 shadow-sm">
+                <div class="col-sm-6 col-md-6 col-lg-3">
+                    <div class="card h-100 border-0 shadow-sm card-hover transition-effect">
                         <div class="card-body">
                             <div class="d-flex align-items-center mb-3">
-                                <div class="bg-primary p-3 rounded-circle me-3">
+                                <div class="bg-primary p-3 rounded-circle me-3 pulse-effect">
                                     <i class="bi bi-person-check text-white"></i>
                                 </div>
                                 <div>
-                                    <h6 class="mb-0">Your Profile</h6>
+                                    <h6 class="mb-0 text-nowrap">Your Profile</h6>
                                     <small class="text-muted">Resume & Skills</small>
                                 </div>
                             </div>
@@ -67,21 +69,19 @@
                             {% endif %}
                         </div>
                     </div>
-                </div>
-
-                <!-- Job Matches -->
-                <div class="col-md-3">
-                    <div class="card h-100 border-0 shadow-sm">
+                </div>                <!-- Job Matches -->
+                <div class="col-sm-6 col-md-6 col-lg-3">
+                    <div class="card h-100 border-0 shadow-sm card-hover transition-effect">
                         <div class="card-body">
                             <div class="d-flex align-items-center mb-3">
-                                <div class="bg-success p-3 rounded-circle me-3">
+                                <div class="bg-success p-3 rounded-circle me-3 pulse-effect">
                                     <i class="bi bi-briefcase text-white"></i>
                                 </div>
                                 <div>
-                                    <h6 class="mb-0">Job Matches</h6>
+                                    <h6 class="mb-0 text-nowrap">Job Matches</h6>
                                     <small class="text-muted">Based on Skills</small>
                                 </div>
-                            </div>                            {% if matching_jobs_count > 0 %}
+                            </div>{% if matching_jobs_count > 0 %}
                                 <h3 class="mb-0">{{ matching_jobs_count }}</h3>
                                 <small class="text-success">Matching Jobs Found</small>
                             {% else %}
@@ -92,18 +92,16 @@
                             {% endif %}
                         </div>
                     </div>
-                </div>
-
-                <!-- Skill Gaps -->
-                <div class="col-md-3">
-                    <div class="card h-100 border-0 shadow-sm">
+                </div>                <!-- Skill Gaps -->
+                <div class="col-sm-6 col-md-6 col-lg-3">
+                    <div class="card h-100 border-0 shadow-sm card-hover transition-effect">
                         <div class="card-body">
                             <div class="d-flex align-items-center mb-3">
-                                <div class="bg-warning p-3 rounded-circle me-3">
+                                <div class="bg-warning p-3 rounded-circle me-3 pulse-effect">
                                     <i class="bi bi-lightning text-white"></i>
                                 </div>
                                 <div>
-                                    <h6 class="mb-0">Skills to Learn</h6>
+                                    <h6 class="mb-0 text-nowrap">Skills to Learn</h6>
                                     <small class="text-muted">Improvement Areas</small>
                                 </div>
                             </div>
@@ -116,21 +114,19 @@
                             {% endif %}
                         </div>
                     </div>
-                </div>
-
-                <!-- Course Recommendations -->
-                <div class="col-md-3">
-                    <div class="card h-100 border-0 shadow-sm">
+                </div>                <!-- Course Recommendations -->
+                <div class="col-sm-6 col-md-6 col-lg-3">
+                    <div class="card h-100 border-0 shadow-sm card-hover transition-effect">
                         <div class="card-body">
                             <div class="d-flex align-items-center mb-3">
-                                <div class="bg-info p-3 rounded-circle me-3">
+                                <div class="bg-info p-3 rounded-circle me-3 pulse-effect">
                                     <i class="bi bi-mortarboard text-white"></i>
                                 </div>
                                 <div>
-                                    <h6 class="mb-0">Courses</h6>
+                                    <h6 class="mb-0 text-nowrap">Courses</h6>
                                     <small class="text-muted">Recommendations</small>
                                 </div>
-                            </div>                            {% if missing_skills %}
+                            </div>{% if missing_skills %}
                                 <a href="{{ url_for('course_recommendations') }}" class="btn btn-info btn-sm text-white" onclick="showLoading('Loading course recommendations...')">
                                     <i class="bi bi-book me-1"></i>View Courses
                                 </a>
@@ -141,35 +137,35 @@
                         </div>
                     </div>
                 </div>
-            </div>
-
-            <!-- Add a row for skills visualization after the stats cards -->
-            <div class="row mb-4">
+            </div>            <!-- Add a row for skills visualization after the stats cards -->
+            <div class="row mb-4 g-3">
                 <!-- Skills Insights -->
                 <div class="col-md-6">
-                    <div class="card border-0 shadow-sm">
+                    <div class="card border-0 shadow-sm h-100 card-hover transition-effect">
                         <div class="card-header bg-white">
                             <h5 class="mb-0">Skills Breakdown</h5>
                         </div>
                         <div class="card-body">
                             {% if user_skills_count > 0 %}
                                 <div class="row align-items-center">
-                                    <div class="col-md-6">
-                                        <!-- Canvas for Chart -->
-                                        <canvas id="skillsChart" width="200" height="200"></canvas>
+                                    <div class="col-md-5 d-flex justify-content-center">
+                                        <!-- Canvas for Chart with better alignment -->
+                                        <div class="chart-container" style="position: relative; width: 100%; max-width: 220px;">
+                                            <canvas id="skillsChart"></canvas>
+                                        </div>
                                     </div>
-                                    <div class="col-md-6">
+                                    <div class="col-md-7">
                                         <h6 class="mb-3">Your Skills ({{ user_skills_count }})</h6>
                                         <ul class="list-group list-group-flush">
                                             {% for skill in resume_skills[:5] %}
-                                                <li class="list-group-item d-flex justify-content-between align-items-center px-0">
+                                                <li class="list-group-item d-flex justify-content-between align-items-center px-2 border-start border-primary border-3 rounded mb-2 hover-item">
                                                     <span>{{ skill }}</span>
                                                     <span class="badge bg-primary rounded-pill">✓</span>
                                                 </li>
                                             {% endfor %}
                                             {% if resume_skills|length > 5 %}
-                                                <li class="list-group-item px-0 text-center">
-                                                    <a href="{{ url_for('profile') }}" class="text-decoration-none">
+                                                <li class="list-group-item px-0 text-center border-0">
+                                                    <a href="{{ url_for('profile') }}" class="btn btn-sm btn-outline-primary">
                                                         View all skills <i class="bi bi-arrow-right ms-1"></i>
                                                     </a>
                                                 </li>
@@ -189,33 +185,31 @@
                         </div>
                     </div>
                 </div>
-                
-                <!-- Missing Skills Insights -->
+                  <!-- Missing Skills Insights -->
                 <div class="col-md-6">
-                    <div class="card border-0 shadow-sm">
+                    <div class="card border-0 shadow-sm h-100 card-hover transition-effect">
                         <div class="card-header bg-white">
-                            <div class="d-flex justify-content-between align-items-center">                                <h5 class="mb-0">Skills Gap Analysis</h5>
-                                {% if missing_skills %}
-                                    <a href="{{ url_for('course_recommendations') }}" class="btn btn-sm btn-outline-primary" onclick="showLoading('Loading course recommendations...')">
+                            <div class="d-flex justify-content-between align-items-center"><h5 class="mb-0">Skills Gap Analysis</h5>
+                                {% if missing_skills %}                                    <a href="{{ url_for('course_recommendations') }}" class="btn btn-sm btn-outline-warning" onclick="showLoading('Loading course recommendations...')">
                                         <i class="bi bi-mortarboard me-1"></i> Get Courses
                                     </a>
                                 {% endif %}
                             </div>
-                        </div>
-                        <div class="card-body">
+                        </div>                        <div class="card-body">
                             {% if missing_skills %}
                                 <div class="row">
                                     <div class="col-md-12">
-                                        <ul class="list-group list-group-flush">
-                                            {% for skill in missing_skills[:6] %}                                                <li class="list-group-item d-flex justify-content-between align-items-center px-0">
+                                        <h6 class="mb-3">Missing Skills ({{ missing_skills|length }})</h6>
+                                        <ul class="list-group list-group-flush">{% for skill in missing_skills[:6] %}
+                                                <li class="list-group-item d-flex justify-content-between align-items-center px-2 border-start border-warning border-3 rounded mb-2 hover-item">
                                                     <span>{{ skill }}</span>
-                                                    <a href="{{ url_for('course_recommendations', skill=skill) }}" class="btn btn-sm btn-outline-warning" onclick="showLoading('Finding courses for {{ skill }}...')">
+                                                    <a href="{{ url_for('course_recommendations', skill=skill) }}" class="btn btn-sm btn-warning text-white rounded-pill" onclick="showLoading('Finding courses for {{ skill }}...')">
                                                         <i class="bi bi-lightning-fill me-1"></i>Learn
                                                     </a>
                                                 </li>
-                                            {% endfor %}
-                                            {% if missing_skills|length > 6 %}                                                <li class="list-group-item px-0 text-center">
-                                                    <a href="{{ url_for('course_recommendations') }}" class="text-decoration-none" onclick="showLoading('Loading course recommendations...')">
+                                            {% endfor %}                                            {% if missing_skills|length > 6 %}
+                                                <li class="list-group-item px-0 text-center border-0">
+                                                    <a href="{{ url_for('course_recommendations') }}" class="btn btn-sm btn-outline-warning" onclick="showLoading('Loading course recommendations...')">
                                                         View all {{ missing_skills|length }} missing skills <i class="bi bi-arrow-right ms-1"></i>
                                                     </a>
                                                 </li>
@@ -236,12 +230,10 @@
                         </div>
                     </div>
                 </div>
-            </div>
-
-            <!-- Recent Job Matches -->
-            <div class="row mb-4">
+            </div>            <!-- Recent Job Matches -->
+            <div class="row mb-4 g-3">
                 <div class="col-12">
-                    <div class="card border-0 shadow-sm">
+                    <div class="card border-0 shadow-sm card-hover transition-effect">
                         <div class="card-header bg-white">
                             <div class="d-flex justify-content-between align-items-center">
                                 <h5 class="mb-0">Recent Job Matches</h5>
@@ -264,9 +256,8 @@
                                                 <th>Action</th>
                                             </tr>
                                         </thead>
-                                        <tbody>
-                                            {% for job in recent_jobs %}
-                                            <tr>
+                                        <tbody>                                            {% for job in recent_jobs %}
+                                            <tr class="hover-item">
                                                 <td class="text-truncate" style="max-width: 200px;" title="{{ job.title }}">
                                                     {{ job.title }}
                                                 </td>
@@ -329,6 +320,16 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // Add hover effects to rows
+    document.querySelectorAll('tr.hover-item').forEach(row => {
+        row.addEventListener('mouseover', () => {
+            row.style.backgroundColor = 'rgba(13, 110, 253, 0.05)';
+        });
+        row.addEventListener('mouseout', () => {
+            row.style.backgroundColor = '';
+        });
+    });
+
     // Skills Chart
     const skillsChartElem = document.getElementById('skillsChart');
     if (skillsChartElem) {
@@ -343,20 +344,38 @@ document.addEventListener('DOMContentLoaded', function() {
                 type: 'doughnut',
                 data: {
                     labels: ['Your Skills', 'Skills to Learn'],
-                    datasets: [{
-                        data: [userSkillsCount, missingSkillsCount],
+                    datasets: [{                        data: [userSkillsCount, missingSkillsCount],
                         backgroundColor: ['#0D6EFD', '#FFC107'],
-                        borderWidth: 0
+                        borderWidth: 0,
+                        hoverOffset: 15,
+                        borderRadius: 5
                     }]
-                },
-                options: {
+                },                options: {
                     responsive: true,
                     maintainAspectRatio: true,
+                    animation: {
+                        animateScale: true,
+                        animateRotate: true
+                    },
                     plugins: {
                         legend: {
-                            position: 'bottom'
-                        },
-                        tooltip: {
+                            position: 'bottom',
+                            labels: {
+                                usePointStyle: true,
+                                padding: 20,
+                                font: {
+                                    size: 12
+                                }
+                            }
+                        },                        tooltip: {
+                            backgroundColor: 'rgba(0,0,0,0.8)',
+                            padding: 12,
+                            titleFont: {
+                                size: 14
+                            },
+                            bodyFont: {
+                                size: 14
+                            },
                             callbacks: {
                                 label: function(context) {
                                     const label = context.label || '';
