@@ -2,6 +2,7 @@ import os
 import sys
 import re
 import traceback
+import logging
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template, flash, redirect, url_for, session
 from flask_sqlalchemy import SQLAlchemy
@@ -19,6 +20,14 @@ import time
 import spacy
 from job_utils import count_user_jobs, get_user_skills
 from flask_bcrypt import Bcrypt
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import BadRequest
 from nlp_utils import extract_skills_from_text, extract_location_from_text
@@ -96,10 +105,10 @@ def ensure_spacy_installed():
     """Ensure spaCy is installed."""
     try:
         import spacy
-        print("spaCy is already installed.")
+        logger.info("spaCy is already installed.")
         return True
     except ImportError:
-        print("spaCy not found. Installing...")
+        logger.info("spaCy not found. Installing...")
         try:
             result = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "spacy"],
@@ -109,7 +118,7 @@ def ensure_spacy_installed():
             )
             
             if result.returncode != 0:
-                print(f"Error installing spaCy: {result.stderr}")
+                logger.error(f"Error installing spaCy: {result.stderr}")
                 return False
             
             # Verify installation worked
@@ -117,10 +126,10 @@ def ensure_spacy_installed():
                 import spacy
                 return True
             except ImportError:
-                print("spaCy still not available after installation.")
+                logger.error("spaCy still not available after installation.")
                 return False
         except Exception as e:
-            print(f"Failed to install spaCy: {e}")
+            logger.error(f"Failed to install spaCy: {e}")
             return False
 
 
@@ -130,10 +139,10 @@ def ensure_model_downloaded(model_name='en_core_web_sm'):
         import spacy
         try:
             spacy.load(model_name)
-            print(f"spaCy model '{model_name}' is already downloaded.")
+            logger.info(f"spaCy model '{model_name}' is already downloaded.")
             return True
         except OSError:
-            print(f"spaCy model '{model_name}' not found. Downloading...")
+            logger.info(f"spaCy model '{model_name}' not found. Downloading...")
             try:
                 # Use a more robust download command with full output capture
                 result = subprocess.run(
@@ -144,24 +153,24 @@ def ensure_model_downloaded(model_name='en_core_web_sm'):
                 )
                 
                 if result.returncode != 0:
-                    print(f"Error downloading spaCy model: {result.stderr}")
+                    logger.error(f"Error downloading spaCy model: {result.stderr}")
                     return False
                     
-                print("Model download output:", result.stdout)
-                print(f"Model '{model_name}' downloaded successfully.")
+                logger.info(f"Model download output: {result.stdout}")
+                logger.info(f"Model '{model_name}' downloaded successfully.")
                 
                 # Verify model was downloaded by trying to load it
                 try:
                     spacy.load(model_name)
                     return True
                 except OSError:
-                    print(f"Model '{model_name}' still not available after download.")
+                    logger.error(f"Model '{model_name}' still not available after download.")
                     return False
             except Exception as e:
-                print(f"Failed to download model: {e}")
+                logger.error(f"Failed to download model: {e}")
                 return False
     except ImportError:
-        print("Cannot download model because spaCy is not installed.")
+        logger.error("Cannot download model because spaCy is not installed.")
         return False
 
 
@@ -176,9 +185,9 @@ def run_scraper(query="All", location="All"):
     Returns:
         bool: True if successful, False otherwise
     """
-    print(f"Starting job scraper with query='{query}', location='{location}'")
+    logger.info(f"Starting job scraper with query='{query}', location='{location}'")
     try:
-        print(f"Running scraper with query='{query}', location='{location}'")
+        logger.info(f"Running scraper with query='{query}', location='{location}'")
         
         # Initialize database and ensure tables exist
         init_db()
@@ -189,20 +198,18 @@ def run_scraper(query="All", location="All"):
         
         # Prepare and run the scraper process
         scraper_command = [sys.executable, "scraper.py", "--query", query, "--location", location]
-        print(f"Running scraper with command: {' '.join(scraper_command)}")
+        logger.info(f"Running scraper with command: {' '.join(scraper_command)}")
         
         result = subprocess.run(scraper_command, capture_output=True, text=True)
         if result.returncode != 0:
-            print(f"Scraper failed with error: {result.stderr}")
+            logger.error(f"Scraper failed with error: {result.stderr}")
             return False
         
-        print(f"Scraper output: {result.stdout}")
-        print("Scraper completed successfully")
-        
+        logger.info("Scraper completed successfully")
         return True
     except Exception as e:
-        print(f"Error running scraper: {str(e)}")
-        traceback.print_exc()
+        logger.error(f"Error running scraper: {str(e)}")
+        logger.error(traceback.format_exc())
         return False
 
 
@@ -281,14 +288,14 @@ def dashboard():
         if current_user.work_experience and len(current_user.work_experience) > 0:
             profile_completion += 25
     except Exception as e:
-        print(f"Error checking work experience: {e}")
+        logger.error(f"Error checking work experience: {e}")
     
     # Check education safely
     try:
         if current_user.education and len(current_user.education) > 0:
             profile_completion += 25
     except Exception as e:
-        print(f"Error checking education: {e}")
+        logger.error(f"Error checking education: {e}")
     
     # Check if profile summary exists
     if current_user.summary:
@@ -849,7 +856,7 @@ def list_all_jobs():
         try:
             course_recommendations = fetch_courses_by_skills(missing_skills)
         except Exception as e:
-            print(f"Error fetching course recommendations: {e}")
+            logger.error(f"Error fetching course recommendations: {e}")
             course_recommendations = {}
 
     return render_template(
@@ -983,13 +990,12 @@ def upload_resume():
             flash(f'Error analyzing resume: {str(e)}', 'danger')
             return redirect(url_for('upload_resume'))
             
-        finally:
-            # Clean up the temporary file
+        finally:            # Clean up the temporary file
             if temp_file and os.path.exists(temp_file):
                 try:
                     os.remove(temp_file)
                 except Exception as e:
-                    print(f"Warning: Could not remove temporary file {temp_file}: {e}")
+                    logger.warning(f"Could not remove temporary file {temp_file}: {e}")
                     
     return render_template('upload_resume.html', form=form)
 
@@ -1050,15 +1056,13 @@ def course_recommendations():
             missing_skills=[],
             needs_resume=True
         )
-    
-    # First, get recommendations for missing skills
+      # First, get recommendations for missing skills
     if missing_skills:
         try:
             course_recommendations = fetch_courses_by_skills(missing_skills)
         except Exception as e:
-            print(f"Error fetching course recommendations for missing skills: {e}")
-    
-    # If we have space for more recommendations or no missing skills,
+            logger.error(f"Error fetching course recommendations for missing skills: {e}")
+      # If we have space for more recommendations or no missing skills,
     # add courses for existing skills as well
     if not missing_skills or len(course_recommendations) < len(all_skills) * 3:
         existing_skills = [s for s in all_skills if s not in missing_skills]
@@ -1070,7 +1074,7 @@ def course_recommendations():
                     if skill not in course_recommendations:
                         course_recommendations[skill] = courses
             except Exception as e:
-                print(f"Error fetching additional course recommendations: {e}")
+                logger.error(f"Error fetching additional course recommendations: {e}")
     
     return render_template(
         'course_recommendations.html',
@@ -1293,7 +1297,7 @@ def check_refresh_status():
 @login_required
 def insights():
     """Display insights and visualizations based on job data."""
-    print("Starting insights route handler")
+    logger.info("Starting insights route handler")
     
     # Check if the user has uploaded a resume or has skills in their profile
     has_uploaded_resume = current_user.last_resume_update is not None
@@ -1311,25 +1315,24 @@ def insights():
     
     # Get selected skills from the request
     selected_skills = request.args.getlist('skills')
-    print(f"Selected skills: {selected_skills}")
+    logger.info(f"Selected skills: {selected_skills}")
     
     # Get all skills for the filter dropdown
     available_skills = get_skill_options()
-    print(f"Available skills count: {len(available_skills)}")
+    logger.info(f"Available skills count: {len(available_skills)}")
     
     try:
         # Generate insights based on jobs data
-        print(f"Getting job insights for user ID: {current_user.id}")
+        logger.info(f"Getting job insights for user ID: {current_user.id}")
         insights_data = get_job_insights(
             user_id=current_user.id,
             filter_by_skills=selected_skills if selected_skills else None
         )
         insights_data["needs_resume"] = False
-        print(f"Insights data has_data: {insights_data.get('has_data', False)}")
+        logger.info(f"Insights data has_data: {insights_data.get('has_data', False)}")
     except Exception as e:
-        import traceback
-        print(f"Error generating insights: {str(e)}")
-        traceback.print_exc()
+        logger.error(f"Error generating insights: {str(e)}")
+        logger.error(traceback.format_exc())
         insights_data = {
             "has_data": False, 
             "needs_resume": False,
@@ -1356,10 +1359,10 @@ if __name__ == '__main__':
             # Clean up old graph files on startup
             graphs_dir = os.path.join('static', 'graphs')
             if os.path.exists(graphs_dir):
-                print(f"Cleaning up old graph files in {graphs_dir}")
+                logger.info(f"Cleaning up old graph files in {graphs_dir}")
                 cleanup_static_graphs(graphs_dir, older_than_days=3)
                 
         app.run(debug=True)
     except Exception as e:
-        print(f"Error starting application: {e}")
-        traceback.print_exc()
+        logger.error(f"Error starting application: {e}")
+        logger.error(traceback.format_exc())

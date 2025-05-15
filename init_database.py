@@ -1,5 +1,6 @@
 import os
 import logging
+import traceback
 from database_manager import initialize_database, create_test_user, check_database, DB_PATH
 
 # Configure logging
@@ -45,6 +46,7 @@ def main():
         
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
+        logger.error(traceback.format_exc())
         return False
 
 if __name__ == "__main__":

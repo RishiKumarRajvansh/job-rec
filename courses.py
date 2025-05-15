@@ -1,5 +1,14 @@
 import requests
 import os
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 # Coursera API credentials
 COURSERA_CLIENT_ID = "vAIqqjwnNy8UMwy2p5yFUD6hA0ieLLo2yEccFELFKMYXXAiG"
@@ -99,10 +108,11 @@ if __name__ == "__main__":
     for skill, courses in results.items():
         print(f"\nCourses for {skill}:")
         for course in courses:
-            print(f"\n📘 {course['name']}")
-            print(f"📝 {course['description']}")
-            print(f"🔗 {course['link']}")
-            print(f"📈 Level: {course['level']}")
-            print(f"⏳ Workload: {course['workload']}")
-            print(f"⭐ Rating: {course['rating']}")
-            print(f"👥 Enrolled: {course['enrolled']}")
+            # Log for debugging purposes only
+            logger.debug(f"Course: {course['name']}")
+            logger.debug(f"Description: {course['description']}")
+            logger.debug(f"Link: {course['link']}")
+            logger.debug(f"Level: {course['level']}")
+            logger.debug(f"Workload: {course['workload']}")
+            logger.debug(f"Rating: {course['rating']}")
+            logger.debug(f"Enrolled: {course['enrolled']}")
