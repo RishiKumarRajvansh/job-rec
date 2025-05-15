@@ -43,39 +43,103 @@
 
             <!-- Quick Stats Cards -->
             <div class="row mb-4">
+                <!-- Profile Stats -->
                 <div class="col-md-3">
-                    <div class="card bg-primary text-white">
+                    <div class="card h-100 border-0 shadow-sm">
                         <div class="card-body">
-                            <h5 class="card-title">Profile Match</h5>
-                            <p class="card-text display-6">{{ profile_completion }}%</p>
-                            <small>Profile completion rate</small>
+                            <div class="d-flex align-items-center mb-3">
+                                <div class="bg-primary p-3 rounded-circle me-3">
+                                    <i class="bi bi-person-check text-white"></i>
+                                </div>
+                                <div>
+                                    <h6 class="mb-0">Your Profile</h6>
+                                    <small class="text-muted">Resume & Skills</small>
+                                </div>
+                            </div>
+                            {% if resume_skills %}
+                                <h3 class="mb-0">{{ user_skills_count }}</h3>
+                                <small class="text-success">Skills Added</small>
+                            {% else %}
+                                <p class="mb-2 text-muted">No skills added yet</p>
+                                <a href="{{ url_for('upload_resume') }}" class="btn btn-primary btn-sm">
+                                    <i class="bi bi-upload me-1"></i>Upload Resume
+                                </a>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
+
+                <!-- Job Matches -->
                 <div class="col-md-3">
-                    <div class="card bg-success text-white">
+                    <div class="card h-100 border-0 shadow-sm">
                         <div class="card-body">
-                            <h5 class="card-title">Matching Jobs</h5>
-                            <p class="card-text display-6">{{ matching_jobs_count }}</p>
-                            <small>Jobs matching your skills</small>
+                            <div class="d-flex align-items-center mb-3">
+                                <div class="bg-success p-3 rounded-circle me-3">
+                                    <i class="bi bi-briefcase text-white"></i>
+                                </div>
+                                <div>
+                                    <h6 class="mb-0">Job Matches</h6>
+                                    <small class="text-muted">Based on Skills</small>
+                                </div>
+                            </div>
+                            {% if matching_jobs_count > 0 %}
+                                <h3 class="mb-0">{{ matching_jobs_count }}</h3>
+                                <small class="text-success">Matching Jobs Found</small>
+                            {% else %}
+                                <p class="mb-2 text-muted">No matching jobs yet</p>
+                                <a href="{{ url_for('list_all_jobs') }}" class="btn btn-success btn-sm">
+                                    <i class="bi bi-search me-1"></i>Browse Jobs
+                                </a>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
+
+                <!-- Skill Gaps -->
                 <div class="col-md-3">
-                    <div class="card bg-info text-white">
+                    <div class="card h-100 border-0 shadow-sm">
                         <div class="card-body">
-                            <h5 class="card-title">Your Skills</h5>
-                            <p class="card-text display-6">{{ user_skills_count }}</p>
-                            <small>Total skills in your profile</small>
+                            <div class="d-flex align-items-center mb-3">
+                                <div class="bg-warning p-3 rounded-circle me-3">
+                                    <i class="bi bi-lightning text-white"></i>
+                                </div>
+                                <div>
+                                    <h6 class="mb-0">Skills to Learn</h6>
+                                    <small class="text-muted">Improvement Areas</small>
+                                </div>
+                            </div>
+                            {% if missing_skills %}
+                                <h3 class="mb-0">{{ missing_skills|length }}</h3>
+                                <small class="text-warning">Skills to Acquire</small>
+                            {% else %}
+                                <p class="mb-2 text-muted">No skill gaps identified</p>
+                                <small class="text-muted">Upload your resume to find skill gaps</small>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
+
+                <!-- Course Recommendations -->
                 <div class="col-md-3">
-                    <div class="card bg-warning text-white">
+                    <div class="card h-100 border-0 shadow-sm">
                         <div class="card-body">
-                            <h5 class="card-title">Skill Gaps</h5>
-                            <p class="card-text display-6">{{ missing_skills_count }}</p>
-                            <small>Skills to improve</small>
+                            <div class="d-flex align-items-center mb-3">
+                                <div class="bg-info p-3 rounded-circle me-3">
+                                    <i class="bi bi-mortarboard text-white"></i>
+                                </div>
+                                <div>
+                                    <h6 class="mb-0">Courses</h6>
+                                    <small class="text-muted">Recommendations</small>
+                                </div>
+                            </div>
+                            {% if missing_skills %}
+                                <a href="{{ url_for('course_recommendations') }}" class="btn btn-info btn-sm text-white">
+                                    <i class="bi bi-book me-1"></i>View Courses
+                                </a>
+                            {% else %}
+                                <p class="mb-2 text-muted">No courses recommended yet</p>
+                                <small class="text-muted">Add skills to get recommendations</small>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
@@ -83,51 +147,75 @@
 
             <!-- Recent Job Matches -->
             <div class="row mb-4">
-                <div class="col-md-8">
-                    <div class="card">
-                        <div class="card-header">
-                            <h5 class="mb-0">Recent Job Matches</h5>
+                <div class="col-12">
+                    <div class="card border-0 shadow-sm">
+                        <div class="card-header bg-white">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <h5 class="mb-0">Recent Job Matches</h5>
+                                {% if recent_jobs %}
+                                    <a href="{{ url_for('list_all_jobs') }}" class="btn btn-outline-primary btn-sm">
+                                        View All <i class="bi bi-arrow-right ms-1"></i>
+                                    </a>
+                                {% endif %}
+                            </div>
                         </div>
                         <div class="card-body">
                             {% if recent_jobs %}
-                                {% for job in recent_jobs %}
-                                <div class="mb-3">
-                                    <h6 class="mb-1">{{ job.title }}</h6>
-                                    <p class="small text-muted mb-1">{{ job.company }} • {{ job.location }}</p>
-                                    <div class="progress" style="height: 10px;">
-                                        <div class="progress-bar" role="progressbar" style="width: {{ job.match_percentage }}%">
-                                            {{ job.match_percentage }}% Match
-                                        </div>
+                                <div class="table-responsive">
+                                    <table class="table table-hover">
+                                        <thead>
+                                            <tr>
+                                                <th>Position</th>
+                                                <th>Company</th>
+                                                <th>Location</th>
+                                                <th>Match</th>
+                                                <th>Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for job in recent_jobs %}
+                                            <tr>
+                                                <td>{{ job.title }}</td>
+                                                <td>{{ job.company }}</td>
+                                                <td>
+                                                    <i class="bi bi-geo-alt me-1"></i>{{ job.location }}
+                                                    {% if job.is_remote %}
+                                                        <span class="badge bg-primary ms-1">Remote</span>
+                                                    {% endif %}
+                                                </td>
+                                                <td>
+                                                    <div class="progress" style="height: 8px; width: 100px;">
+                                                        <div class="progress-bar bg-{{ 'success' if job.match_percentage >= 70 else 'warning' if job.match_percentage >= 40 else 'danger' }}"
+                                                             role="progressbar" 
+                                                             style="width: {{ job.match_percentage }}%">
+                                                        </div>
+                                                    </div>
+                                                    <small class="text-muted">{{ job.match_percentage }}%</small>
+                                                </td>
+                                                <td>
+                                                    <a href="{{ job.url }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                                                        <i class="bi bi-box-arrow-up-right me-1"></i>Apply
+                                                    </a>
+                                                </td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            {% else %}
+                                <div class="text-center py-5">
+                                    <i class="bi bi-search display-4 text-muted mb-3"></i>
+                                    <h5>No Job Matches Yet</h5>
+                                    <p class="text-muted">Upload your resume or add skills to get personalized job matches</p>
+                                    <div class="mt-3">
+                                        <a href="{{ url_for('upload_resume') }}" class="btn btn-primary me-2">
+                                            <i class="bi bi-upload me-1"></i>Upload Resume
+                                        </a>
+                                        <a href="{{ url_for('profile') }}" class="btn btn-outline-primary">
+                                            <i class="bi bi-person-plus me-1"></i>Update Profile
+                                        </a>
                                     </div>
                                 </div>
-                                {% if not loop.last %}<hr>{% endif %}
-                                {% endfor %}
-                            {% else %}
-                                <p class="text-muted">No recent job matches found.</p>
-                            {% endif %}
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <!-- Skill Recommendations -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h5 class="mb-0">Recommended Skills</h5>
-                        </div>
-                        <div class="card-body">
-                            {% if missing_skills %}
-                                <div class="d-flex flex-wrap gap-2">
-                                {% for skill in missing_skills[:5] %}
-                                    <span class="badge bg-warning text-dark">{{ skill }}</span>
-                                {% endfor %}
-                                </div>
-                                <div class="mt-3">
-                                    <a href="{{ url_for('course_recommendations') }}" class="btn btn-outline-primary btn-sm">
-                                        View Courses <i class="bi bi-arrow-right ms-1"></i>
-                                    </a>
-                                </div>
-                            {% else %}
-                                <p class="text-muted">No skill gaps identified.</p>
                             {% endif %}
                         </div>
                     </div>

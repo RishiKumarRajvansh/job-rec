@@ -247,8 +247,65 @@ def nl2br(value):
 
 @app.route('/')
 def index():
-    resume_skills = session.get('resume_skills', [])
-    return render_template('index.html', resume_skills=resume_skills)
+    """Landing page - redirects to dashboard if user is logged in"""
+    if current_user.is_authenticated:
+        return redirect(url_for('dashboard'))
+    return render_template('index.html')
+
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    """Dashboard page showing user stats and recommendations"""
+    # Get user's resume skills
+    resume_skills = session.get(f'user_{current_user.id}_resume_skills', [])
+    
+    # Calculate profile completion
+    profile_completion = 0
+    if resume_skills:  # Check if user has uploaded resume skills
+        profile_completion += 25
+    
+    # Check work experience safely
+    try:
+        if current_user.work_experience and len(current_user.work_experience) > 0:
+            profile_completion += 25
+    except Exception as e:
+        print(f"Error checking work experience: {e}")
+    
+    # Check education safely
+    try:
+        if current_user.education and len(current_user.education) > 0:
+            profile_completion += 25
+    except Exception as e:
+        print(f"Error checking education: {e}")
+    
+    # Check if profile summary exists
+    if current_user.summary:
+        profile_completion += 25
+    
+    # Get matching jobs
+    jobs = search_jobs_db(query="All", location="All", resume_skills=resume_skills, user_id=current_user.id) if resume_skills else []
+    matching_jobs = [job for job in jobs if job.get('match_percentage', 0) > 50]
+    
+    # Get missing skills (skills that appear most in jobs but user doesn't have)
+    all_required_skills = []
+    for job in jobs:
+        all_required_skills.extend(job.get('required_skills', []))
+        all_required_skills.extend(job.get('nice_to_have_skills', []))
+    
+    # Count skill frequencies
+    from collections import Counter
+    skill_freq = Counter(all_required_skills)
+    missing_skills = [skill for skill, _ in skill_freq.most_common() if skill not in resume_skills]
+    
+    return render_template('dashboard.html',
+                         profile_completion=profile_completion,
+                         matching_jobs_count=len(matching_jobs),
+                         user_skills_count=len(resume_skills),
+                         missing_skills_count=len(missing_skills),
+                         recent_jobs=matching_jobs[:5],
+                         missing_skills=missing_skills,
+                         active_page='dashboard')
 
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -284,7 +341,16 @@ def login():
 
 @app.route('/logout')
 def logout():
+    if current_user.is_authenticated:
+        # Clear user-specific session data
+        for key in [f'user_{current_user.id}_resume_skills', 
+                   f'user_{current_user.id}_missing_skills',
+                   f'user_{current_user.id}_last_resume_update',
+                   'last_scrape_time']:
+            if key in session:
+                session.pop(key)
     logout_user()
+    flash('You have been logged out.', 'info')
     return redirect(url_for('index'))
 
 
@@ -351,7 +417,7 @@ def profile():
                 if need_scrape:
                     # Trigger a scrape with the new skills/location
                     user_skills = [s.strip() for s in current_user.skills.split(',')] if current_user.skills else []
-                    session['resume_skills'] = user_skills
+                    session[f'user_{current_user.id}_resume_skills'] = user_skills
                     session.pop('last_scrape_time', None)  # Force a fresh scrape
                     return redirect(url_for('list_all_jobs', run_scraper='true'))
                 
@@ -372,8 +438,8 @@ def profile():
         form.certifications.data = current_user.certifications
         form.summary.data = current_user.summary
 
-    # Get resume skills if they exist
-    resume_skills = session.get('resume_skills', [])
+    # Get resume skills from user-specific session key
+    resume_skills = session.get(f'user_{current_user.id}_resume_skills', [])
     
     return render_template('profile.html',
                          form=form,
@@ -503,26 +569,42 @@ def list_all_jobs():
     location = request.args.get('location', 'All')
     run_scraper = request.args.get('run_scraper', 'false').lower() == 'true'
     force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
-      # Get user's skills from session and profile
-    resume_skills = []
     
-    # Get skills from user-specific session key
+    # Initialize skills lists
+    resume_skills = []
+    profile_skills = []
+    
+    # Get skills from session
     session_skills = session.get(f'user_{current_user.id}_resume_skills', [])
     if session_skills:
         if isinstance(session_skills, str):
             resume_skills.extend(s.strip() for s in session_skills.split(',') if s.strip())
         elif isinstance(session_skills, list):
             resume_skills.extend(s.strip() for s in session_skills if s.strip())
-            
-    # Get skills from user profile if available
-    if current_user and current_user.resume_skills:
-        profile_skills = current_user.resume_skills
-        if isinstance(profile_skills, str):
-            profile_skills = [s.strip() for s in profile_skills.split(',') if s.strip()]
-            resume_skills.extend(profile_skills)
     
-    # Remove duplicates and empty strings
-    resume_skills = list(set(s for s in resume_skills if s))
+    # Get skills from user profile
+    if current_user.skills:
+        profile_skills = [s.strip() for s in current_user.skills.split(',') if s.strip()]
+          # Combine all skills and remove duplicates
+    all_skills = list(set(resume_skills + profile_skills))
+    
+    # Check if user has any skills
+    if not all_skills:
+        flash('⚠️ Please add skills to your profile or upload your resume to see relevant job matches.', 'warning')
+        return render_template(
+            'jobs_list.html',
+            jobs=[],
+            query=query,
+            location=location,
+            run_scraper=False,
+            resume_skills=[],
+            missing_skills=[],
+            is_loading=False,
+            has_skills=False  # Flag to control template display
+        )
+    
+    # If we have skills, update resume_skills for the rest of the function
+    resume_skills = all_skills
     
     # Get the last scrape time from session
     last_scrape_time = session.get('last_scrape_time')
@@ -535,7 +617,8 @@ def list_all_jobs():
     )
 
     # Get jobs either by scraping or from database
-    if need_scrape:
+    has_skills = bool(resume_skills)  # Define has_skills based on resume_skills
+    if need_scrape and has_skills:
         try:
             # Show loading state
             session['is_loading'] = True
@@ -796,6 +879,10 @@ def upload_resume():
 @app.route("/course_recommendations")
 @login_required
 def course_recommendations():
+    # Clear recommendations cache if force refresh
+    if request.args.get('force_refresh'):
+        session.pop(f'user_{current_user.id}_course_recommendations', None)
+        
     # Get the user's skills
     user_skills = []
     if current_user.skills:
@@ -852,13 +939,18 @@ def course_recommendations():
 @app.route('/reset_skills')
 @login_required
 def reset_skills():
-    # Clear skills from session
-    if 'resume_skills' in session:
-        session.pop('resume_skills')
+    # Clear skills from session using user-specific keys
+    for key in [f'user_{current_user.id}_resume_skills', 
+                f'user_{current_user.id}_missing_skills',
+                f'user_{current_user.id}_last_resume_update']:
+        if key in session:
+            session.pop(key)
     
     # Clear skills from user profile
     if current_user.is_authenticated:
-        update_user_profile(current_user.id, skills=None)
+        current_user.skills = None
+        current_user.resume_skills = None
+        db.session.commit()
         flash('Skills have been reset', 'info')
     
     return redirect(url_for('list_all_jobs'))

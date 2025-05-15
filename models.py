@@ -18,6 +18,10 @@ class User(db.Model, UserMixin):
     summary = db.Column(db.Text, nullable=True, default='')
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     last_resume_update = db.Column(db.DateTime, nullable=True)
+    
+    # Define relationships
+    work_experience = db.relationship('WorkExperience', backref='user', lazy=True)
+    education = db.relationship('Education', backref='user', lazy=True)
 
     def __repr__(self):
         return f"User('{self.username}', '{self.email}')"
@@ -38,10 +42,18 @@ class Education(db.Model):
     institution = db.Column(db.String(255), nullable=False)
     degree = db.Column(db.String(255), nullable=False)
     field_of_study = db.Column(db.String(255), nullable=True)
-    start_date = db.Column(db.Date, nullable=True)
-    end_date = db.Column(db.Date, nullable=True)
+    start_date = db.Column(db.DateTime, nullable=True)
+    end_date = db.Column(db.DateTime, nullable=True)
     gpa = db.Column(db.Float, nullable=True)
     description = db.Column(db.Text, nullable=True)
+
+    @property
+    def start_date_formatted(self):
+        return self.start_date.strftime('%Y-%m-%d') if self.start_date else None
+
+    @property
+    def end_date_formatted(self):
+        return self.end_date.strftime('%Y-%m-%d') if self.end_date else None
 
 class Job(db.Model):
     __tablename__ = 'jobs'  # Explicitly set the table name

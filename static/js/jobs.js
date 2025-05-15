@@ -1,5 +1,4 @@
 document.addEventListener('DOMContentLoaded', function() {
-    const loadingContainer = document.getElementById('search-loading');
     const jobsContent = document.getElementById('jobs-content');
     const jobsContainer = document.getElementById('jobs-container');
     const searchProfileBtn = document.getElementById('search-profile-btn');
@@ -11,36 +10,11 @@ document.addEventListener('DOMContentLoaded', function() {
     if (searchProfileBtn) {
         searchProfileBtn.addEventListener('click', function(e) {
             e.preventDefault();
-            const btnText = searchProfileBtn.querySelector('.btn-text');
-            const spinner = searchProfileBtn.querySelector('.spinner-border');
-            
-            btnText.style.display = 'none';
-            spinner.classList.remove('d-none');
-            
+            showLoading('Searching profile...');
             setTimeout(() => {
                 window.location.href = searchProfileBtn.href;
             }, 100);
         });
-    }
-
-    // Function to show loading state
-    function showLoading(isSearch = true) {
-        if (isSearch) {
-            loadingContainer.style.display = 'block';
-        } else {
-            scrapeLoadingContainer.style.display = 'block';
-        }
-        jobsContent.style.display = 'none';
-    }
-
-    // Function to hide loading state
-    function hideLoading(isSearch = true) {
-        if (isSearch) {
-            loadingContainer.style.display = 'none';
-        } else {
-            scrapeLoadingContainer.style.display = 'none';
-        }
-        jobsContent.style.display = 'block';
     }
 
     // Function to show error message
