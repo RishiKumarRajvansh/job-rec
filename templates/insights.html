@@ -106,10 +106,24 @@
                     <h3 class="card-title">${{ '{:,}'.format(insights.salary_stats.avg) }}</h3>
                     <p class="card-text">Average Salary</p>
                 </div>
+            </div>        </div>
+        {% endif %}
+          
+        {% if insights.user_top_skills_percentage is defined %}
+        <div class="col-md-3 col-sm-6 mb-4">
+            <div class="card stats-card h-100">
+                <div class="card-body text-center">
+                    <div class="stats-icon mx-auto">
+                        <i class="bi bi-person-check"></i>
+                    </div>
+                    <h3 class="card-title">{{ insights.user_top_skills_percentage }}%</h3>
+                    <p class="card-text">Your Skill Coverage</p>
+                </div>
             </div>
         </div>
         {% endif %}
-          {% if insights.top_skills %}
+          
+        {% if insights.top_skills %}
         <div class="col-md-3 col-sm-6 mb-4">
             <div class="card stats-card h-100">
                 <div class="card-body text-center">
@@ -152,6 +166,28 @@
                     <div class="chart-container">
                         <img src="{{ insights.skill_trends_graph }}" class="img-fluid" alt="Skill Trends">
                     </div>
+                </div>
+            </div>
+        </div>        {% endif %}
+
+        <!-- User Skill Coverage -->
+        {% if insights.user_skill_coverage_graph %}
+        <div class="col-lg-6 mb-4">
+            <div class="card insight-card h-100">
+                <div class="card-header bg-success text-white">
+                    <h5 class="card-title mb-0">
+                        <i class="bi bi-person-check me-2"></i>Your Skill Coverage
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <img src="{{ insights.user_skill_coverage_graph }}" class="img-fluid" alt="Your Skill Coverage">
+                    </div>
+                    {% if insights.user_skills_count %}
+                    <div class="text-center mt-3">
+                        <p>You have {{ insights.user_has_top_skills }} of the top {{ insights.top_skills|length }} in-demand skills ({{ insights.user_top_skills_percentage }}%)</p>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -307,8 +343,56 @@
                 </div>
             </div>
         </div>
-        {% endif %}
+        {% endif %}    </div>
+
+    {% if insights.original_user_skills %}
+    <!-- Your Resume Skills -->
+    <div class="row mb-4">
+        <div class="col-lg-12">
+            <div class="card insight-card">
+                <div class="card-header bg-info text-white">
+                    <h5 class="card-title mb-0">
+                        <i class="bi bi-person-vcard me-2"></i>Skills From Your Resume
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex flex-wrap gap-2">
+                        {% for skill in insights.original_user_skills %}
+                        <span class="badge bg-success p-2">{{ skill }}</span>
+                        {% endfor %}
+                    </div>
+                    <p class="text-muted small mt-2">These are the skills detected in your latest uploaded resume.</p>
+                </div>
+            </div>
+        </div>
     </div>
+    {% endif %}
+
+{% if insights.missing_skills %}
+    <!-- Skill Gap Analysis -->
+    <div class="row mb-4">
+        <div class="col-lg-12">
+            <div class="card insight-card">
+                <div class="card-header bg-warning">
+                    <h5 class="card-title mb-0">
+                        <i class="bi bi-lightbulb me-2"></i>Skills to Add to Your Resume
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-info">
+                        <p class="mb-2">Based on current job market trends, consider learning these in-demand skills:</p>
+                        <div class="d-flex flex-wrap gap-2 mt-3">
+                            {% for skill in insights.missing_skills %}
+                            <span class="badge bg-primary p-2">{{ skill }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <p class="text-muted small">These skills appear frequently in job listings but aren't on your resume yet.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 
     <!-- Top Skills and Locations Tables -->
     <div class="row mb-4">
@@ -328,11 +412,13 @@
                                     <th>Skill</th>
                                     <th class="text-end">Number of Jobs</th>
                                 </tr>
-                            </thead>
-                            <tbody>
+                            </thead>                            <tbody>
                                 {% for skill in insights.top_skills %}
-                                <tr>
-                                    <td>{{ skill.skill }}</td>
+                                <tr {% if skill.user_has %}class="table-success"{% endif %}>
+                                    <td>
+                                        {{ skill.skill }}
+                                        {% if skill.user_has %}<i class="bi bi-check-circle-fill text-success ms-2" title="You have this skill"></i>{% endif %}
+                                    </td>
                                     <td class="text-end">{{ skill.count }}</td>
                                 </tr>
                                 {% endfor %}

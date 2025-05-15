@@ -21,13 +21,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def get_job_insights(user_id, filter_by_skills=None):
+def get_job_insights(user_id, filter_by_skills=None, user_skills=None):
     """
     Generate insights from job data
     
     Args:
         user_id (int): The user ID to get jobs for
         filter_by_skills (list): Optional list of skills to filter by
+        user_skills (list): Optional list of user's skills from resume/profile
         
     Returns:
         dict: Dictionary containing various insights and graph paths
@@ -55,10 +56,13 @@ def get_job_insights(user_id, filter_by_skills=None):
         
         # Convert to pandas DataFrame for easier analysis
         jobs_df = pd.DataFrame([dict(job) for job in jobs])
-        
-        # Clean and process the DataFrame
-        insights = _process_job_data(jobs_df, filter_by_skills)
+          # Clean and process the DataFrame
+        insights = _process_job_data(jobs_df, filter_by_skills, user_skills)
         insights["has_data"] = True
+        
+        # Add user skills to insights if provided
+        if user_skills:
+            insights["user_skills"] = user_skills
         
         return insights
     
@@ -72,9 +76,13 @@ def get_job_insights(user_id, filter_by_skills=None):
         if conn:
             conn.close()
 
-def _process_job_data(jobs_df, filter_by_skills=None):
+def _process_job_data(jobs_df, filter_by_skills=None, user_skills=None):
     """Process job data and generate visualizations"""
     insights = {}
+    
+    # Include user skills in insights if provided
+    if user_skills:
+        insights["user_resume_skills"] = user_skills
     
     # Apply skills filter if provided
     if filter_by_skills:
@@ -102,12 +110,11 @@ def _process_job_data(jobs_df, filter_by_skills=None):
                 "has_data": False,
                 "message": f"No jobs match the selected skills filter"
             }
-    
-    # Get total number of jobs
+      # Get total number of jobs
     insights["total_jobs"] = len(jobs_df)
     
     # Generate various insights and visualizations
-    insights.update(_get_skill_trends(jobs_df))
+    insights.update(_get_skill_trends(jobs_df, user_skills))
     insights.update(_get_location_trends(jobs_df))
     insights.update(_get_company_trends(jobs_df))
     insights.update(_get_salary_trends(jobs_df))
@@ -139,7 +146,7 @@ def _parse_skills(skills_str):
     except:
         return []
 
-def _get_skill_trends(jobs_df):
+def _get_skill_trends(jobs_df, user_skills=None):
     """Generate skill trend visualizations"""
     result = {}
     
@@ -166,6 +173,26 @@ def _get_skill_trends(jobs_df):
         result["top_skills"] = []
         return result
     
+    # Process user skills if provided
+    user_skills_set = set()
+    if user_skills:
+        # Store the original user skills in the result
+        result["original_user_skills"] = user_skills
+        
+        # Normalize user skills for matching
+        user_skills_set = {s.lower().strip() for s in user_skills if s}
+        result["user_skills_count"] = len(user_skills_set)
+        
+        # Calculate how many top skills the user has
+        top_skills_set = {s.lower().strip() for s, _ in top_skills}
+        user_has_skills = top_skills_set.intersection(user_skills_set)
+        result["user_has_top_skills"] = len(user_has_skills)
+        result["user_top_skills_percentage"] = int((len(user_has_skills) / len(top_skills_set)) * 100) if top_skills_set else 0
+        
+        # Create a "missing skills" list for explicit skill gap analysis
+        missing_skills = [skill for skill, _ in top_skills if skill.lower().strip() not in user_skills_set]
+        result["missing_skills"] = missing_skills[:5]  # Top 5 missing skills
+    
     # Generate skills bar chart
     plt.figure(figsize=(10, 6))
     plt.style.use('fivethirtyeight')
@@ -173,9 +200,21 @@ def _get_skill_trends(jobs_df):
     skills, counts = zip(*top_skills)
     y_pos = np.arange(len(skills))
     
-    bars = plt.barh(y_pos, counts, align='center', alpha=0.7, color='skyblue')
-    plt.yticks(y_pos, [s[:30] for s in skills])  # Truncate long skill names    plt.xlabel('Number of Jobs')
-    plt.title('Most In-Demand Skills')
+    # Color bars based on whether the user has the skill (if user_skills provided)
+    bar_colors = []
+    if user_skills_set:
+        for skill in skills:
+            if skill.lower().strip() in user_skills_set:
+                bar_colors.append('green')  # User has this skill
+            else:
+                bar_colors.append('red')    # User doesn't have this skill
+    else:
+        bar_colors = ['skyblue'] * len(skills)  # Default color if no user skills
+    
+    bars = plt.barh(y_pos, counts, align='center', alpha=0.7, color=bar_colors)
+    plt.yticks(y_pos, [s[:30] for s in skills])  # Truncate long skill names
+    plt.xlabel('Number of Jobs')
+    plt.title('Most In-Demand Skills' + (' (Green: You have the skill)' if user_skills_set else ''))
     
     # Add count labels to bars
     for i, bar in enumerate(bars):
@@ -194,7 +233,31 @@ def _get_skill_trends(jobs_df):
     plt.close()
     buffer.close()
     
-    result["top_skills"] = [{"skill": s, "count": c} for s, c in top_skills]
+    result["top_skills"] = [{"skill": s, "count": c, "user_has": s.lower().strip() in user_skills_set if user_skills_set else False} for s, c in top_skills]
+    
+    # Add a user skill coverage chart if user skills are provided
+    if user_skills_set:
+        # Calculate skill coverage pie chart
+        plt.figure(figsize=(8, 8))
+        user_coverage = result.get("user_top_skills_percentage", 0)
+        missing_coverage = 100 - user_coverage
+        
+        plt.pie([user_coverage, missing_coverage], 
+                labels=['Skills You Have', 'Skills to Learn'], 
+                colors=['green', 'red'],
+                autopct='%1.1f%%',
+                startangle=90,
+                shadow=False)
+        plt.axis('equal')
+        plt.title('Your Skill Coverage of Top In-Demand Skills')
+        
+        buffer = BytesIO()
+        plt.savefig(buffer, format='png')
+        buffer.seek(0)
+        image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        result["user_skill_coverage_graph"] = f"data:image/png;base64,{image_base64}"
+        plt.close()
+        buffer.close()
     
     # Required vs Nice-to-Have skills chart
     req_count = Counter(required_skills)

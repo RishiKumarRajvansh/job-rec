@@ -1038,10 +1038,56 @@ def course_recommendations():
             missing_skills=[],
             needs_resume=True
         )
-    
-    # Get missing skills from user-specific session key
+      # Get missing skills from user-specific session key
     missing_skills = session.get(f'user_{current_user.id}_missing_skills', [])
-      # Initialize course recommendations dictionary
+    
+    # Force refresh missing skills if the last_resume_update is newer than the session data
+    resume_update_time = None
+    if current_user.last_resume_update:
+        resume_update_time = current_user.last_resume_update.isoformat()
+        
+    session_update_time = session.get(f'user_{current_user.id}_last_resume_update')
+      # Always recalculate missing skills for the course recommendations page
+    # to ensure they are based on the most up-to-date user skills
+    if True:
+        logger.info(f"Resume updated since last missing skills calculation, refreshing missing skills")
+        
+        # Get jobs data
+        from database_manager import search_jobs_db
+        jobs = search_jobs_db(query="All", location="All", resume_skills=all_skills, user_id=current_user.id)
+        
+        # Calculate missing skills from job requirements
+        all_required_skills = []
+        for job in jobs:
+            # Handle required skills
+            if isinstance(job.get('required_skills'), str):
+                try:
+                    required = json.loads(job['required_skills'])
+                    all_required_skills.extend(required)
+                except:
+                    pass
+            elif isinstance(job.get('required_skills'), list):
+                all_required_skills.extend(job.get('required_skills', []))
+                
+        # Convert all skills to lowercase for case-insensitive comparison
+        all_skills_lower = [skill.lower() for skill in all_skills if skill]
+        
+        # Count skill frequencies
+        from collections import Counter
+        skill_freq = Counter(all_required_skills)
+        
+        # Get missing skills (case-insensitive comparison)
+        missing_skills = [skill for skill, freq in skill_freq.most_common() 
+                         if skill and skill.lower() not in all_skills_lower and freq > 1]
+        
+        # Update missing skills in session
+        session[f'user_{current_user.id}_missing_skills'] = missing_skills
+        
+        # Update the session's resume update timestamp
+        if resume_update_time:
+            session[f'user_{current_user.id}_last_resume_update'] = resume_update_time
+    
+    # Initialize course recommendations dictionary
     course_recommendations = {}
     
     # If user hasn't uploaded a resume and has no skills defined in profile, 
@@ -1319,13 +1365,32 @@ def insights():
     # Get all skills for the filter dropdown
     available_skills = get_skill_options()
     logger.info(f"Available skills count: {len(available_skills)}")
-    
     try:
+        # Get user's skills from session and profile
+        resume_skills = []
+        profile_skills = []
+        
+        # Get skills from session with user-specific key
+        session_skills = session.get(f'user_{current_user.id}_resume_skills', [])
+        if session_skills:
+            if isinstance(session_skills, str):
+                resume_skills = [s.strip() for s in session_skills.split(',') if s.strip()]
+            elif isinstance(session_skills, list):
+                resume_skills = [s.strip() for s in session_skills if s.strip()]
+        
+        # Get skills from user profile
+        if current_user.skills:
+            profile_skills = [s.strip() for s in current_user.skills.split(',') if s.strip()]
+        
+        # Combine all skills and remove duplicates
+        all_skills = list(set(resume_skills + profile_skills))
+        
         # Generate insights based on jobs data
-        logger.info(f"Getting job insights for user ID: {current_user.id}")
+        logger.info(f"Getting job insights for user ID: {current_user.id} with {len(all_skills)} skills")
         insights_data = get_job_insights(
             user_id=current_user.id,
-            filter_by_skills=selected_skills if selected_skills else None
+            filter_by_skills=selected_skills if selected_skills else None,
+            user_skills=all_skills
         )
         insights_data["needs_resume"] = False
         logger.info(f"Insights data has_data: {insights_data.get('has_data', False)}")
