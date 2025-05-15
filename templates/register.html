@@ -62,9 +62,8 @@
                             {% else %}
                                 {{ form.confirm_password(class="form-control") }}
                             {% endif %}
-                        </div>
-                        <div class="mb-3">
-                            {{ form.submit(class="btn btn-primary") }}
+                        </div>                        <div class="mb-3">
+                            {{ form.submit(class="btn btn-primary", onclick="showLoading('Creating your account...')") }}
                         </div>
                     </form>
                 </div>

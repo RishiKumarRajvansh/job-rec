@@ -1,14 +1,25 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="container mt-4">
-    <div class="d-flex justify-content-between align-items-center mb-4">
+<div class="container mt-4">    <div class="d-flex justify-content-between align-items-center mb-4">
         <h2><i class="bi bi-mortarboard me-2"></i>Course Recommendations</h2>
-        <a href="{{ url_for('course_recommendations', force_refresh=true) }}" class="btn btn-outline-primary" data-action="refresh-courses">
-            <i class="bi bi-arrow-clockwise me-1"></i> Refresh Courses
-        </a>
     </div>
 
+    {% if needs_resume %}
+    <div class="alert alert-info">
+        <h4 class="alert-heading"><i class="bi bi-info-circle-fill me-2"></i>Welcome to Course Recommendations!</h4>
+        <p>To get personalized course recommendations, you'll need to:</p>
+        <ul>
+            <li><strong>Upload your resume</strong> so we can analyze your skills</li>
+            <li>OR <strong>add skills to your profile</strong> manually</li>
+        </ul>
+        <hr>
+        <div class="d-flex justify-content-between">
+            <a href="{{ url_for('upload_resume') }}" class="btn btn-primary">Upload Resume</a>
+            <a href="{{ url_for('profile') }}" class="btn btn-secondary">Update Profile</a>
+        </div>
+    </div>
+    {% else %}
     <div class="row">
         <div class="col-md-4">
             <div class="card mb-4">
@@ -87,9 +98,9 @@
             {% else %}
             <div class="alert alert-info">
                 <i class="bi bi-info-circle-fill me-2"></i>No course recommendations available at the moment. Try browsing jobs to get personalized recommendations.
-            </div>
-            {% endif %}
+            </div>            {% endif %}
         </div>
     </div>
+    {% endif %}
 </div>
 {% endblock %}

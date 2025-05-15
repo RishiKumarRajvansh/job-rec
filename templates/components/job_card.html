@@ -1,19 +1,23 @@
 {% macro render_job_card(job, user_skills=None) %}
 <div class="card mb-4 border-0 shadow-sm job-card" data-match-percentage="{{ job.match_percentage|default(0) }}">
-    <div class="card-body">
+    <div class="card-body position-relative">
+        <!-- Job Match Badge - Absolutely positioned at top-right -->
+        {% if job.match_percentage is defined and job.match_percentage > 0 %}
+        <div class="position-absolute top-0 end-0 pt-3 pe-3">
+            <span class="badge bg-{{ 'success' if job.match_percentage >= 70 else 'warning' if job.match_percentage >= 40 else 'danger' }} rounded-pill shadow-sm">
+                <i class="bi bi-award me-1"></i>{{ job.match_percentage }}% Match
+            </span>
+        </div>
+        {% endif %}
+        
         <!-- Header with Title and Company -->
         <div class="row mb-3">
             <div class="col">
-                <div class="d-flex justify-content-between align-items-start">
+                <div class="d-flex align-items-start">
                     <div>
-                        <h5 class="card-title mb-1">{{ job.title }}</h5>
+                        <h5 class="card-title mb-1 fw-bold">{{ job.title }}</h5>
                         <h6 class="text-muted mb-2">{{ job.company }}</h6>
                     </div>
-                    {% if job.match_percentage is defined and job.match_percentage > 0 %}
-                    <span class="badge bg-{{ 'success' if job.match_percentage >= 70 else 'warning' if job.match_percentage >= 40 else 'danger' }} rounded-pill">
-                        {{ job.match_percentage }}% Match
-                    </span>
-                    {% endif %}
                 </div>
             </div>
         </div>
@@ -65,8 +69,7 @@
         <div class="mb-3">
             <!-- Required Skills -->
             {% if job.required_skills %}
-            <div class="mb-2">
-                <h6 class="small fw-bold mb-2">
+            <div class="mb-2">                <h6 class="small fw-bold mb-2">
                     <i class="bi bi-check-circle-fill me-1 text-primary"></i>Required Skills 
                     {% if user_skills and job.matching_required_skills %}
                     <span class="text-success ms-1">
@@ -126,17 +129,16 @@
                 </div>
             </div>
             {% endif %}
-        </div>
-
-        <!-- Footer with Apply Button -->
+        </div>        <!-- Footer with Apply Button -->
+        <hr class="my-3">
         <div class="d-flex justify-content-between align-items-center">
             <small class="text-muted">
-                <i class="bi bi-calendar me-1"></i>{{ job.date_posted or job.date_scraped }}
+                <i class="bi bi-calendar-event me-1"></i>{{ job.date_posted or job.date_scraped }}
             </small>
             <div>
                 {% if job.url %}
-                <a href="{{ job.url }}" target="_blank" class="btn btn-primary btn-sm">
-                    <i class="bi bi-box-arrow-up-right me-1"></i>Apply
+                <a href="{{ job.url }}" target="_blank" class="btn btn-primary btn-sm apply-btn">
+                    <i class="bi bi-box-arrow-up-right me-1"></i>Apply Now
                 </a>
                 {% endif %}
             </div>

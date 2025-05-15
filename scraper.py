@@ -25,7 +25,7 @@ from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -50,7 +50,9 @@ def fetch_page(url, params=None, retries=3, delay=5):
     }
     for attempt in range(retries):
         try:
-            logger.debug(f"Fetching URL: {url} with params: {params}")
+            # Only log this at INFO level for significant page fetches
+            if attempt == 0:
+                logger.info(f"Fetching jobs data from: {url}")
             response = requests.get(url, headers=headers, params=params, timeout=20)
             response.raise_for_status()
             return response.text
@@ -61,10 +63,9 @@ def fetch_page(url, params=None, retries=3, delay=5):
                 return None
         except requests.exceptions.RequestException as e:
             logger.error(f"Error fetching {url} (attempt {attempt + 1}/{retries}): {e}")
-            
             if attempt < retries - 1:
                 actual_delay = delay + random.uniform(0, delay * 0.5)
-                logger.debug(f"Retrying in {actual_delay:.2f} seconds...")
+                logger.info(f"Retrying in {actual_delay:.2f} seconds...")
                 time.sleep(actual_delay)
             else:
                 logger.error(f"Failed to fetch {url} after {retries} attempts.")
@@ -497,7 +498,6 @@ def _do_search(search_query, location, pages, searched_urls, skill=None, user_id
             continue
             
         logger.info(f"Found {len(articles)} job listings on page {page_num}")
-            
         for article in articles:
             try:
                 # First parse and save basic job details
@@ -507,16 +507,15 @@ def _do_search(search_query, location, pages, searched_urls, skill=None, user_id
                     if skill:
                         add_job_skills(job_id, [skill])
                     jobs_found.append(job_id)
-                    logger.debug(f"Successfully processed job listing with ID: {job_id}")
+                    # Only log summary information, not individual job processing
             except Exception as e:
                 logger.error(f"Error processing job listing: {str(e)}")
-                logger.error(traceback.format_exc())  # Add stack trace for better debugging
                 continue
         
         # Random delay between pages
         if page_num < pages:
             delay = random.uniform(2, 5)
-            logger.debug(f"Waiting {delay:.2f} seconds before next page...")
+            logger.info(f"Waiting {delay:.2f} seconds before next page...")
             time.sleep(delay)
     
     return jobs_found
@@ -540,7 +539,8 @@ def scrape_jobs(query="All", location="All", user_skills=None, pages=1, force_cl
         logger.error("Cannot scrape jobs without user_id")
         return []
 
-    logger.info(f"Starting job scrape for user {user_id} with query: '{query}', location: '{location}', skills: {user_skills}")    # Initialize jobs list to store all scraped jobs
+    logger.info(f"Starting job scrape for user {user_id} with query: '{query}', location: '{location}', skills: {user_skills}")
+    # Initialize jobs list to store all scraped jobs
     all_jobs = []
     
     try:
@@ -558,17 +558,12 @@ def scrape_jobs(query="All", location="All", user_skills=None, pages=1, force_cl
         
         if not adzuna_jobs:
             logger.warning("No jobs returned from scrape_adzuna_jobs")
-            return []
-            
-        # Log the type and content of adzuna_jobs for debugging
-        logger.debug(f"Type of adzuna_jobs: {type(adzuna_jobs)}")
-        logger.debug(f"Number of jobs returned: {len(adzuna_jobs)}")
-        
+            return []        # Log job count information
+        logger.info(f"Number of jobs returned: {len(adzuna_jobs)}")
         for job_listing in adzuna_jobs:
             try:
                 job_id = parse_job_listing(job_listing, user_id, user_skills)
                 if job_id:
-                    logger.debug(f"Successfully parsed and saved job {job_id}")
                     all_jobs.append(job_id)
                 else:
                     logger.warning(f"Failed to parse/save job listing: {job_listing}")

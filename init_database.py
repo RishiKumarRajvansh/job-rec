@@ -1,6 +1,6 @@
 import os
 import logging
-from database_manager import initialize_database, create_test_user, DB_PATH
+from database_manager import initialize_database, create_test_user, check_database, DB_PATH
 
 # Configure logging
 logging.basicConfig(
@@ -22,7 +22,7 @@ def main():
             os.remove(DB_PATH)
             
         # Initialize database with all tables
-        logger.info("Initializing database...")
+        logger.info("Initializing database with all tables...")
         if not initialize_database():
             logger.error("Failed to initialize database")
             return False
@@ -33,13 +33,23 @@ def main():
         if not user_id:
             logger.error("Failed to create test user")
             return False
-            
-        logger.info(f"Database initialized successfully with test user (ID: {user_id})")
-        return True
+        
+        # Verify database setup
+        logger.info("Verifying database setup...")
+        if check_database():
+            logger.info(f"Database initialized successfully with test user (ID: {user_id})")
+            return True
+        else:
+            logger.error("Database verification failed")
+            return False
         
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         return False
 
 if __name__ == "__main__":
-    main()
+    success = main()
+    if success:
+        print("✅ Database initialized successfully!")
+    else:
+        print("❌ Database initialization failed. Check logs for details.")

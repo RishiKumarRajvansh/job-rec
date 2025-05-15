@@ -531,7 +531,7 @@ def get_all_jobs():
     conn.close()
     return jobs_list
 
-def search_jobs_db(query="All", location="All", resume_skills=None, user_id=None):
+def search_jobs_db(query="All", location="All", resume_skills=None, user_id=None, job_type="All"):
     """Search jobs in the database with filtering and skill matching."""
     conn = get_db_connection()
     try:
@@ -546,6 +546,8 @@ def search_jobs_db(query="All", location="All", resume_skills=None, user_id=None
             location = location.strip()
         if resume_skills:
             resume_skills = [skill.strip().lower() for skill in resume_skills]
+        if job_type:
+            job_type = job_type.strip()
         
         # Base query joining jobs with job_skills
         base_query = '''

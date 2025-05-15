@@ -5,6 +5,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const runScraper = document.getElementById('run-scraper-flag')?.value === 'true';
     const query = document.getElementById('query-value')?.value;
     const location = document.getElementById('location-value')?.value;
+    
+    // Always show loading at first when jobs page loads
+    showLoading('Loading job listings...');
 
     // Handle profile search button loading state
     if (searchProfileBtn) {
@@ -19,23 +22,26 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Function to show error message
     function showError(message) {
-        jobsContainer.innerHTML = `
-            <div class="col-12">
-                <div class="alert alert-danger">
-                    <i class="bi bi-exclamation-triangle me-2"></i>
-                    ${message}
+        if (jobsContainer) {
+            jobsContainer.innerHTML = `
+                <div class="col-12">
+                    <div class="alert alert-danger">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        ${message}
+                    </div>
                 </div>
-            </div>
-        `;
+            `;
+        }
     }
 
-    // Initial scraping on page load if needed
+    // Check for loading status on page load
     if (runScraper) {
-        showLoading(true);
+        showLoading('Finding relevant jobs for you...');
         pollRefreshStatus();
-    }
-
-    // Function to poll refresh status
+    } else {
+        // Even if not explicitly scraping, check if anything is loading
+        checkLoadingStatus();
+    }    // Function to poll refresh status
     function pollRefreshStatus() {
         fetch('/check_refresh_status')
             .then(response => response.json())
@@ -45,23 +51,36 @@ document.addEventListener('DOMContentLoaded', function() {
                     setTimeout(pollRefreshStatus, 2000);
                 } else {
                     // Loading complete, reload the page
+                    hideLoading();
                     window.location.reload();
                 }
             })
             .catch(error => {
                 console.error('Error checking refresh status:', error);
-                hideLoading(true);
+                hideLoading();
                 showError('Error checking job status. Please try again.');
             });
     }
-
-    // Handle manual refresh
-    const refreshButton = document.getElementById('scrape-jobs');
-    if (refreshButton) {
-        refreshButton.addEventListener('click', function() {
-            showLoading(false);
-            window.location.href = '/refresh_jobs';
-        });
+    
+    // Function to check if anything is loading
+    function checkLoadingStatus() {
+        fetch('/check_refresh_status')
+            .then(response => response.json())
+            .then(data => {
+                if (data.loading) {
+                    // Something is loading, start polling
+                    showLoading('Loading job data...');
+                    pollRefreshStatus();
+                } else {
+                    // Nothing is loading, just hide the indicator
+                    setTimeout(() => hideLoading(), 1000);
+                }
+            })
+            .catch(error => {
+                console.error('Error checking loading status:', error);
+                // Hide loading after error
+                hideLoading();
+            });
     }
 
     // Quick filter buttons

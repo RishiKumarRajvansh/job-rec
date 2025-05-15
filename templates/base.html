@@ -32,24 +32,26 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
                     {% if current_user.is_authenticated %}
-                        <li class="nav-item">
-                            <a class="nav-link {{ 'active' if request.endpoint == 'dashboard' }}" href="{{ url_for('dashboard') }}">
+                        <li class="nav-item">                            <a class="nav-link {{ 'active' if request.endpoint == 'dashboard' }}" href="{{ url_for('dashboard') }}" onclick="showLoading('Loading dashboard...')">
                                 <i class="bi bi-speedometer2 me-1"></i>Dashboard
                             </a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link {{ 'active' if request.endpoint == 'list_all_jobs' }}" href="{{ url_for('list_all_jobs') }}">
+                            <a class="nav-link {{ 'active' if request.endpoint == 'list_all_jobs' }}" href="{{ url_for('list_all_jobs') }}" onclick="showLoading('Loading job listings...')">
                                 <i class="bi bi-briefcase me-1"></i>Browse Jobs
                             </a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link {{ 'active' if request.endpoint == 'upload_resume' }}" href="{{ url_for('upload_resume') }}">
+                            <a class="nav-link {{ 'active' if request.endpoint == 'upload_resume' }}" href="{{ url_for('upload_resume') }}" onclick="showLoading('Preparing resume upload...')">
                                 <i class="bi bi-file-earmark-text me-1"></i>Upload Resume
                             </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link {{ 'active' if request.endpoint == 'course_recommendations' }}" href="{{ url_for('course_recommendations') }}">
+                        </li>                        <li class="nav-item">
+                            <a class="nav-link {{ 'active' if request.endpoint == 'course_recommendations' }}" href="{{ url_for('course_recommendations') }}" onclick="showLoading('Loading course recommendations...')">
                                 <i class="bi bi-mortarboard me-1"></i>Course Recommendations
+                            </a>
+                        </li>                        <li class="nav-item">
+                            <a class="nav-link {{ 'active' if request.endpoint == 'insights' }}" href="{{ url_for('insights') }}" onclick="showLoading('Loading insights...')">
+                                <i class="bi bi-graph-up me-1"></i>Insights
                             </a>
                         </li>
                     {% else %}
@@ -57,14 +59,13 @@
                             <a class="nav-link {{ 'active' if request.endpoint == 'index' }}" href="{{ url_for('index') }}">
                                 <i class="bi bi-house me-1"></i>Home
                             </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link" href="{{ url_for('register') }}">
+                        </li>                        <li class="nav-item">
+                            <a class="nav-link" href="{{ url_for('register') }}" onclick="showLoading('Loading registration page...')">
                                 <i class="bi bi-person-plus me-1"></i>Register
                             </a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link" href="{{ url_for('login') }}">
+                            <a class="nav-link" href="{{ url_for('login') }}" onclick="showLoading('Loading login page...')">
                                 <i class="bi bi-box-arrow-in-right me-1"></i>Login
                             </a>
                         </li>
