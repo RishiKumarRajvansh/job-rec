@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template, flash, redirect, url_for, session
 from flask_sqlalchemy import SQLAlchemy
+import sqlalchemy
 from flask_migrate import Migrate
 from flask_login import LoginManager, UserMixin, login_user, current_user, logout_user, login_required
 from werkzeug.utils import secure_filename
@@ -19,6 +20,7 @@ import subprocess
 import time
 import spacy
 from job_utils import count_user_jobs, get_user_skills
+from job_counter import get_job_counts
 from flask_bcrypt import Bcrypt
 
 # Configure logging
@@ -336,11 +338,12 @@ def dashboard():
                 job['date_obj'] = datetime.now()
         else:
             job['date_obj'] = datetime.now()
-    
-    # First sort by date - most recent first
+      # First sort by date - most recent first
     jobs.sort(key=lambda x: x.get('date_obj', datetime.now()), reverse=True)
+      # Use the job_counter utility to get standardized job counts
+    job_counts = get_job_counts(jobs, user_id=current_user.id)
     
-    # Then filter for matching jobs with score > 40%
+    # Get the matching jobs with score > 40% from the job counts
     matching_jobs = [job for job in jobs if job.get('match_percentage', 0) > 40]
       # Get missing skills (skills that appear most in jobs but user doesn't have)
     all_required_skills = []
@@ -360,17 +363,15 @@ def dashboard():
                      if skill and skill.lower() not in all_skills_lower and freq > 1]
     
     # Store missing skills in session for use in other parts of the app
-    session[f'user_{current_user.id}_missing_skills'] = missing_skills
-      # Dashboard data loaded successfully
-    
+    session[f'user_{current_user.id}_missing_skills'] = missing_skills    # Dashboard data loaded successfully
     return render_template('dashboard.html',
                            profile_completion=profile_completion,
-                           matching_jobs_count=len(matching_jobs),
                            user_skills_count=len(all_skills),
                            missing_skills_count=len(missing_skills),
                            recent_jobs=matching_jobs[:5] if matching_jobs else [],
                            missing_skills=missing_skills[:10] if missing_skills else [],
                            resume_skills=all_skills,        # Pass ALL skills for display
+                           job_counts=job_counts,           # Pass all job counts for consistency
                            active_page='dashboard')
 
 
@@ -380,13 +381,23 @@ def register():
         return redirect(url_for('index'))
     form = RegistrationForm()
     if form.validate_on_submit():
-        hashed_password = bcrypt.generate_password_hash(form.password.data).decode('utf-8')
-        user = User(username=form.username.data, email=form.email.data, password=hashed_password)
-        db.session.add(user)
-        db.session.commit()
-        flash('Your account has been created! You are now able to log in', 'success')
-        return redirect(url_for('login'))
-    return render_template('register.html', title='Register', form=form, current_year=datetime.now().year)
+        try:
+            hashed_password = bcrypt.generate_password_hash(form.password.data).decode('utf-8')
+            user = User(username=form.username.data, email=form.email.data, password=hashed_password)
+            db.session.add(user)
+            db.session.commit()
+            flash('Your account has been created! You are now able to log in', 'success')
+            return redirect(url_for('login'))
+        except sqlalchemy.exc.IntegrityError as e:
+            db.session.rollback()
+            if "UNIQUE constraint failed: user.username" in str(e):
+                flash(f'Username "{form.username.data}" is already taken. Please choose a different username.', 'danger')
+            elif "UNIQUE constraint failed: user.email" in str(e):
+                flash(f'Email address "{form.email.data}" is already registered. Please use a different email or try logging in.', 'danger')
+            else:
+                flash('An error occurred during registration. Please try again.', 'danger')
+            
+    return render_template('register.html', title='Register', form=form, current_year=datetime.now().year, page_class='register-page')
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -402,7 +413,7 @@ def login():
             return redirect(next_page) if next_page else redirect(url_for('index'))
         else:
             flash('Login Unsuccessful. Please check email and password', 'danger')
-    return render_template('login.html', title='Login', form=form, current_year=datetime.now().year)
+    return render_template('login.html', title='Login', form=form, current_year=datetime.now().year, page_class='login-page')
 
 
 @app.route('/logout')
@@ -834,10 +845,9 @@ def list_all_jobs():
             # Filter based on job type
             if (job_type_lower == 'remote' and is_remote) or (job_type_lower == 'onsite' and not is_remote):
                 filtered_jobs.append(job)
-        jobs = filtered_jobs
-    
-    # Get total job count before pagination
-    total_jobs = len(jobs)
+        jobs = filtered_jobs    # Get consistent job counts using our utility
+    job_counts = get_job_counts(jobs, user_id=current_user.id)
+    total_jobs = job_counts["total_jobs"]  # Keep for pagination calculation
     
     # Apply pagination
     if per_page != 0:  # If per_page is 0, show all jobs
@@ -849,20 +859,18 @@ def list_all_jobs():
     
     # Calculate total pages for pagination
     total_pages = (total_jobs + per_page - 1) // per_page if per_page > 0 else 1
-    
-    # Fetch course recommendations if we have missing skills
+      # Fetch course recommendations if we have missing skills
     course_recommendations = {}
     if missing_skills:
         try:
             course_recommendations = fetch_courses_by_skills(missing_skills)
         except Exception as e:
             logger.error(f"Error fetching course recommendations: {e}")
-            course_recommendations = {}
-
+            course_recommendations = {}    
     return render_template(
         'jobs_list.html',
         jobs=paginated_jobs,
-        total_jobs=total_jobs,
+        # removed total_jobs parameter - using job_counts.total_jobs instead
         page=page,
         per_page=per_page,
         total_pages=total_pages,
@@ -873,6 +881,7 @@ def list_all_jobs():
         run_scraper=need_scrape,
         resume_skills=resume_skills,
         missing_skills=missing_skills,
+        job_counts=job_counts,  # Pass the complete job counts
         is_loading=session.get('is_loading', False)
     )
 
@@ -996,7 +1005,7 @@ def upload_resume():
                 except Exception as e:
                     logger.warning(f"Could not remove temporary file {temp_file}: {e}")
                     
-    return render_template('upload_resume.html', form=form)
+    return render_template('upload_resume.html', form=form, page_class='upload-resume-page', current_year=datetime.now().year)
 
 
 @app.route("/course_recommendations")
@@ -1384,8 +1393,7 @@ def insights():
         
         # Combine all skills and remove duplicates
         all_skills = list(set(resume_skills + profile_skills))
-        
-        # Generate insights based on jobs data
+          # Generate insights based on jobs data
         logger.info(f"Getting job insights for user ID: {current_user.id} with {len(all_skills)} skills")
         insights_data = get_job_insights(
             user_id=current_user.id,
@@ -1393,6 +1401,13 @@ def insights():
             user_skills=all_skills
         )
         insights_data["needs_resume"] = False
+      # Get the same job data and counts used in list_all_jobs and dashboard to ensure consistency
+        jobs = search_jobs_db(query="All", location="All", resume_skills=all_skills, user_id=current_user.id)
+        job_counts = get_job_counts(jobs, user_id=current_user.id)
+        
+        # Use consistent job counts from job_counts utility
+        insights_data.update(job_counts)  # This will ensure we use the same count everywhere
+            
         logger.info(f"Insights data has_data: {insights_data.get('has_data', False)}")
     except Exception as e:
         logger.error(f"Error generating insights: {str(e)}")

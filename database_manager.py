@@ -667,11 +667,20 @@ def search_jobs_db(query="All", location="All", resume_skills=None, user_id=None
                         'total_required_skills': total_job_skills
                     })
                     job_list.append(job_dict)
-            else:
-                job_list.append(job_dict)
+                else:
+                    job_list.append(job_dict)
             
-            job_list.append(job_dict)
+            # Removed duplicate job_list.append(job_dict) here
+          # Ensure we have unique job IDs in our result
+        seen_job_ids = set()
+        unique_job_list = []
+        for job in job_list:
+            if job['id'] not in seen_job_ids:
+                seen_job_ids.add(job['id'])
+                unique_job_list.append(job)
         
+        job_list = unique_job_list
+            
         # Sort jobs by match percentage if resume skills provided
         if resume_skills:
             job_list.sort(key=lambda x: (

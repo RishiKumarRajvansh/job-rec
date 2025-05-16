@@ -2,6 +2,14 @@
 
 ## Recent Updates
 
+### Job Count Standardization
+- Implemented consistent job counting methodology across all pages
+- Added a central `job_counter.py` utility to standardize job counts
+- Fixed inconsistent job count displays between jobs list, dashboard, and insights pages
+- Added different job count categories: total jobs, matching jobs, remote jobs, and onsite jobs
+- Fixed duplicate job counting bug in database_manager.py that was causing inconsistent counts
+- Updated templates to use consistent job count variables across all pages
+
 ### Job Scraping and Display
 - Fixed the "Browse Jobs" feature to only scrape when necessary:
   - When no jobs are available for the user

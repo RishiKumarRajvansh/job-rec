@@ -44,14 +44,13 @@ def fetch_courses_by_skills(skills, limit=5):
     
     for skill in skills:
         skill = skill.strip().lower()
-        
         params = {
             "q": "search",
             "query": skill,
             "limit": limit,
             "fields": "name,description,slug,photoUrl,workload,level,specializations"
         }
-
+        
         try:
             response = requests.get(url, params=params, auth=auth, timeout=5)
             response.raise_for_status()
@@ -78,6 +77,11 @@ def fetch_courses_by_skills(skills, limit=5):
                 
                 # Sort courses by rating and enrollment
                 courses.sort(key=lambda x: (x['rating'], x['enrolled']), reverse=True)
+                
+                # If API succeeded but returned no courses, still add the skill with empty list
+                # This ensures the skill appears in the UI with a "No courses available" message
+                if not courses:
+                    logger.info(f"No courses found for skill: {skill}")
                 
             recommendations[skill] = courses[:limit]  # Limit number of courses per skill
 

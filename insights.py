@@ -110,8 +110,22 @@ def _process_job_data(jobs_df, filter_by_skills=None, user_skills=None):
                 "has_data": False,
                 "message": f"No jobs match the selected skills filter"
             }
-      # Get total number of jobs
-    insights["total_jobs"] = len(jobs_df)
+      
+    # Convert DataFrame to list of dictionaries for job_counter
+    jobs_list = jobs_df.to_dict('records')
+      # Import job_counter here to avoid circular imports
+    try:
+        from job_counter import get_job_counts
+        # Extract user_id from first job in list if available
+        user_id = None
+        if jobs_list and len(jobs_list) > 0 and 'user_id' in jobs_list[0]:
+            user_id = jobs_list[0]['user_id']
+            
+        job_counts = get_job_counts(jobs_list, user_id=user_id)
+        insights.update(job_counts)  # Add all job counts to insights
+    except ImportError:
+        # Fallback if import fails
+        insights["total_jobs"] = len(jobs_df)
     
     # Generate various insights and visualizations
     insights.update(_get_skill_trends(jobs_df, user_skills))

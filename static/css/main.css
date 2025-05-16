@@ -1,14 +1,38 @@
 /* Custom styles for the Job Recommender app */
 
-/* General Layout */
+/* General Layout - Sticky Footer */
+html {
+    height: 100%;
+}
+
 body {
     min-height: 100vh;
     display: flex;
     flex-direction: column;
+    margin: 0;
+    padding: 0;
+    position: relative;
 }
 
-main {
-    flex: 1;
+.content-wrapper {
+    flex: 1 0 auto;
+    width: 100%;
+    padding-top: 70px; /* Add padding to account for fixed navbar */
+}
+
+.footer {
+    flex-shrink: 0;
+    width: 100%;    margin-top: auto;
+    padding: 1rem 0;
+    border-top: 1px solid rgba(0, 0, 0, 0.05); /* More subtle border */
+    background-color: #f8f9fa;
+}
+
+/* For pages with minimal content */
+html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
 }
 
 /* Navigation */
