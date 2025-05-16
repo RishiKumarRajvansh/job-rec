@@ -43,4 +43,8 @@ __pycache__/
 .vscode/
 .idea/
 *.swp
+
+# Documentation files
 /readme.md
+/README.md
+README.md
