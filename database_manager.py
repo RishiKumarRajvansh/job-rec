@@ -13,14 +13,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Database file path
-DB_PATH = 'instance/job_recommender.db'
+# Database file path - use absolute path
+basedir = os.path.abspath(os.path.dirname(__file__))
+instance_dir = os.path.join(basedir, 'instance')
+DB_PATH = os.path.join(instance_dir, 'job_recommender.db')
 
 def get_db_connection():
     """Create a connection to the SQLite database."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # This enables column access by name
-    return conn
+    # Ensure the instance directory exists
+    if not os.path.exists(instance_dir):
+        try:
+            os.makedirs(instance_dir, exist_ok=True)
+            logger.info(f"Created instance directory at {instance_dir}")
+        except Exception as e:
+            logger.error(f"Error creating instance directory: {e}")
+    
+    # Log database access attempt
+    logger.info(f"Attempting to connect to database at {DB_PATH}")
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row  # This enables column access by name
+        logger.info("Database connection successful")
+        return conn
+    except sqlite3.Error as e:
+        logger.error(f"Database connection error: {e}")
+        raise
 
 def initialize_database():
     """Initialize database tables if they don't exist."""

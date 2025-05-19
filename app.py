@@ -9,6 +9,8 @@ from flask_sqlalchemy import SQLAlchemy
 import sqlalchemy
 from flask_migrate import Migrate
 from flask_login import LoginManager, UserMixin, login_user, current_user, logout_user, login_required
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from werkzeug.utils import secure_filename
 from database_manager import search_jobs_db, initialize_database as init_db, clear_jobs_table
 from courses import fetch_courses_by_skills
@@ -65,20 +67,89 @@ except OSError:
 
 # Initialize Flask app
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your_secret_key_here'  # Change this to a random secret key
+
+# Load configuration based on environment
+# Set base directory and instance path before config loading
+basedir = os.path.abspath(os.path.dirname(__file__))
+instance_dir = os.path.join(basedir, 'instance')
+
+# Configure Flask instance path explicitly
+app = Flask(__name__, 
+           instance_path=instance_dir)  # Explicitly set instance path
+
+# Load configuration
+from config import get_config
+app.config.from_object(get_config())
+
+# Ensure instance directory exists and has proper permissions
+if not os.path.exists(instance_dir):
+    try:
+        os.makedirs(instance_dir, exist_ok=True)
+        logger.info(f"Created instance directory at {instance_dir}")
+        # Ensure directory has proper permissions
+        import stat
+        os.chmod(instance_dir, stat.S_IRWXU)
+    except Exception as e:
+        logger.error(f"Error creating/setting permissions on instance directory: {e}")
+        logger.error(traceback.format_exc())
+
+# Set upload folder
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Fix the SQLite URI format - use posix-style paths even on Windows
+db_path = os.path.join(instance_dir, 'job_recommender.db')
+db_uri = f'sqlite:///{db_path.replace(os.sep, "/")}'
+app.config['SQLALCHEMY_DATABASE_URI'] = db_uri
+logger.info(f"Using database at: {db_path} with URI: {app.config['SQLALCHEMY_DATABASE_URI']}")
+
+# Add connection pooling and timeout settings
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'connect_args': {
+        'check_same_thread': False,  # Allow multithreaded access
+        'timeout': 30  # Increase timeout for busy situations
+    },
+    'pool_pre_ping': True  # Check connections before using them
+}
+
+# Create instance folder if it doesn't exist
+with app.app_context():
+    if not os.path.exists(app.instance_path):
+        os.makedirs(app.instance_path, exist_ok=True)
+        logger.info(f"Created Flask instance directory at {app.instance_path}")
+
+# Verify database path exists
+if not os.path.exists(db_path):
+    logger.warning(f"Database file not found at {db_path}. It will be created on first access.")
 
 # Initialize CSRF protection
 csrf = CSRFProtect(app)
 
-# Configure database
-basedir = os.path.abspath(os.path.dirname(__file__))
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'instance/job_recommender.db')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# Import security utilities
+from security import limiter_handler
+
+# Initialize Flask-Limiter for rate limiting
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://",
+    strategy="fixed-window",
+    on_breach=limiter_handler
+)
 
 # Initialize SQLAlchemy
 from models import db, User  # Import db and User from models.py
 db.init_app(app)
+
+# Create tables if they don't exist
+with app.app_context():
+    try:
+        logger.info("Creating database tables if they don't exist...")
+        db.create_all()
+        logger.info("Database tables created/verified successfully.")
+    except Exception as e:
+        logger.error(f"Error creating database tables: {e}")
+        logger.error(traceback.format_exc())
 
 # Initialize Flask-Migrate
 migrate = Migrate(app, db)
@@ -90,6 +161,21 @@ login_manager.login_view = 'login'
 
 # Initialize Flask-Bcrypt
 bcrypt = Bcrypt(app)
+
+# Import and set up security features
+from security import set_secure_headers, require_https, limiter_handler
+
+# Configure security response headers
+@app.after_request
+def add_security_headers(response):
+    """Add security headers to all responses"""
+    return set_secure_headers(response)
+
+# Require HTTPS in production
+@app.before_request
+def enforce_https():
+    """Enforce HTTPS in production environments"""
+    return require_https()
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -376,6 +462,7 @@ def dashboard():
 
 
 @app.route('/register', methods=['GET', 'POST'])
+@limiter.limit("10 per hour")
 def register():
     if current_user.is_authenticated:
         return redirect(url_for('index'))
@@ -401,18 +488,37 @@ def register():
 
 
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("10 per minute")
 def login():
     if current_user.is_authenticated:
         return redirect(url_for('index'))
     form = LoginForm()
     if form.validate_on_submit():
-        user = User.query.filter_by(email=form.email.data).first()
-        if user and bcrypt.check_password_hash(user.password, form.password.data):
-            login_user(user, remember=form.remember.data)
-            next_page = request.args.get('next')
-            return redirect(next_page) if next_page else redirect(url_for('index'))
-        else:
-            flash('Login Unsuccessful. Please check email and password', 'danger')
+        try:
+            logger.info(f"Attempting login for user with email: {form.email.data}")
+            
+            # Ensure database connection
+            from sqlalchemy import inspect
+            inspector = inspect(db.engine)
+            if not inspector.has_table("user"):
+                logger.error("User table not found in database. Database may not be initialized correctly.")
+                flash('System error: Database not properly set up. Please contact support.', 'danger')
+                return render_template('login.html', title='Login', form=form, current_year=datetime.now().year, page_class='login-page')
+            
+            user = User.query.filter_by(email=form.email.data).first()
+            if user and bcrypt.check_password_hash(user.password, form.password.data):
+                login_user(user, remember=form.remember.data)
+                logger.info(f"User {user.username} (ID: {user.id}) logged in successfully.")
+                next_page = request.args.get('next')
+                return redirect(next_page) if next_page else redirect(url_for('index'))
+            else:
+                logger.warning(f"Failed login attempt for email: {form.email.data}")
+                flash('Login Unsuccessful. Please check email and password', 'danger')
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Login error: {str(e)}")
+            logger.error(traceback.format_exc())
+            flash('An error occurred during login. Please try again later.', 'danger')
     return render_template('login.html', title='Login', form=form, current_year=datetime.now().year, page_class='login-page')
 
 
@@ -429,6 +535,29 @@ def logout():
     logout_user()
     flash('You have been logged out.', 'info')
     return redirect(url_for('index'))
+
+
+# Error handlers for production
+@app.errorhandler(404)
+def page_not_found(e):
+    """Handle 404 errors"""
+    logger.warning(f"404 error: {request.url}")
+    return render_template('error.html', code=404, message="The page you're looking for doesn't exist."), 404
+
+
+@app.errorhandler(403)
+def forbidden(e):
+    """Handle 403 errors"""
+    logger.warning(f"403 error: {request.url}")
+    return render_template('error.html', code=403, message="You don't have permission to access this resource."), 403
+
+
+@app.errorhandler(500)
+def server_error(e):
+    """Handle 500 errors"""
+    logger.error(f"500 error: {str(e)}")
+    logger.error(traceback.format_exc())
+    return render_template('error.html', code=500, message="Something went wrong on our end. Please try again later."), 500
 
 
 @app.route("/profile", methods=['GET', 'POST'])
@@ -718,7 +847,6 @@ def list_all_jobs():
         job_count == 0 or                            # No jobs in database yet
         needs_refresh(last_scrape_time, hours_threshold=6)  # Last scrape was over 6 hours ago
     )
-    
     if need_scrape and has_skills:
         try:
             # Show loading state
@@ -750,9 +878,19 @@ def list_all_jobs():
         finally:
             # Clear loading state
             session.pop('is_loading', None)
-    else:
-        # Get existing jobs from database
-        jobs = search_jobs_db(query, location, resume_skills, user_id=current_user.id, job_type=job_type)
+    # Get existing jobs from database
+    jobs = search_jobs_db(query, location, resume_skills, user_id=current_user.id, job_type=job_type)
+    
+    # Check if jobs were found in database and set appropriate message
+    # Don't show "No jobs found" message if jobs were actually found
+    if jobs:
+        # Clear any "No jobs found" messages if jobs are found in the database
+        # This prevents showing contradictory messages
+        flashes_to_keep = []
+        for category, message in session.get('_flashes', []):
+            if 'No jobs found' not in message:
+                flashes_to_keep.append((category, message))
+        session['_flashes'] = flashes_to_keep
 
     # Process jobs to ensure proper skill formatting and matching
     missing_skills_set = set()
@@ -849,6 +987,15 @@ def list_all_jobs():
     job_counts = get_job_counts(jobs, user_id=current_user.id)
     total_jobs = job_counts["total_jobs"]  # Keep for pagination calculation
     
+    # Check for contradictory messages - if we have jobs but also a "No jobs found" flash message
+    if total_jobs > 0:
+        # Remove any "No jobs found" flash messages to avoid confusion
+        flashes_to_keep = []
+        for category, message in session.get('_flashes', []):
+            if 'No jobs found' not in message:
+                flashes_to_keep.append((category, message))
+        session['_flashes'] = flashes_to_keep
+        
     # Apply pagination
     if per_page != 0:  # If per_page is 0, show all jobs
         start_idx = (page - 1) * per_page
@@ -1196,6 +1343,9 @@ def refresh_jobs():
             session.pop('is_loading', None)
             return jsonify({'success': False, 'message': 'No skills found'})
         
+        # Clear any existing flash messages to avoid contradictory messaging
+        session['_flashes'] = []
+        
         # Clean up any data that needs refreshing when jobs change
         cleanup_job_related_data()
         
@@ -1426,11 +1576,79 @@ def insights():
     )
 
 
-# Removed debug route
+@app.route('/health')
+def health_check():
+    """
+    Health check endpoint for monitoring in production.
+    Returns 200 if the application is running and all components are healthy,
+    503 if some components are degraded, or 500 if critical components are down.
+    """
+    try:
+        # Use our comprehensive health check module
+        from health_check import get_system_health
+        
+        # Get system health status
+        health_data = get_system_health()
+        
+        # Additional Flask-specific checks
+        health_data["web_server"] = {
+            "status": "healthy",
+            "workers": os.environ.get("GUNICORN_WORKERS", "N/A"),
+            "application": "Flask"
+        }
+        
+        # Return appropriate status code based on overall health
+        if health_data["status"] == "healthy":
+            return jsonify(health_data), 200
+        elif health_data["status"] == "degraded":
+            return jsonify(health_data), 503  # Service Unavailable but still functioning
+        else:
+            return jsonify(health_data), 500  # Internal Server Error
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }), 500
 
+
+# Flask CLI commands
+@app.cli.command("init-db")
+def init_db_command():
+    """Clear existing data and create new tables."""
+    try:
+        # Get absolute path to the instance directory
+        basedir = os.path.abspath(os.path.dirname(__file__))
+        instance_dir = os.path.join(basedir, 'instance')
+        
+        # Create instance directory if it doesn't exist
+        if not os.path.exists(instance_dir):
+            logger.info(f"Creating instance directory at {instance_dir}")
+            os.makedirs(instance_dir, exist_ok=True)
+            
+        # Print out the path for debugging
+        db_path = os.path.join(instance_dir, 'job_recommender.db')
+        logger.info(f"Using database at: {db_path}")
+        
+        # Initialize database
+        with app.app_context():
+            db.create_all()
+            init_db()
+            logger.info("Database initialized successfully!")
+    except Exception as e:
+        logger.error(f"Error initializing database: {e}")
+        logger.error(traceback.format_exc())
 
 if __name__ == '__main__':
     try:
+        # Ensure the instance directory exists
+        instance_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instance')
+        if not os.path.exists(instance_dir):
+            logger.info(f"Creating instance directory at {instance_dir}")
+            os.makedirs(instance_dir)
+        
         with app.app_context():
             db.create_all()
             init_db()  # Initialize database tables
@@ -1440,8 +1658,9 @@ if __name__ == '__main__':
             if os.path.exists(graphs_dir):
                 logger.info(f"Cleaning up old graph files in {graphs_dir}")
                 cleanup_static_graphs(graphs_dir, older_than_days=3)
-                
-        app.run(debug=True)
+        
+        # For local development
+        app.run(host='127.0.0.1', port=5000, debug=os.environ.get('FLASK_DEBUG', 'True') == 'True')
     except Exception as e:
         logger.error(f"Error starting application: {e}")
         logger.error(traceback.format_exc())

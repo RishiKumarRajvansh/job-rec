@@ -3,7 +3,18 @@ from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 from sqlalchemy.sql import func
+import os
+import logging
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
+# Initialize SQLAlchemy with no Flask app yet (will be registered later)
 db = SQLAlchemy()
 
 class User(db.Model, UserMixin):

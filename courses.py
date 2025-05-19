@@ -10,9 +10,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Coursera API credentials
-COURSERA_CLIENT_ID = "vAIqqjwnNy8UMwy2p5yFUD6hA0ieLLo2yEccFELFKMYXXAiG"
-COURSERA_CLIENT_SECRET = "1YVzykQGRQcELt5ZLglV3f0EKWuoqfG1HYEQWr4vEkhu9BIzg0qDGekkEb6L6oJW"
+# Get Coursera API credentials from environment variables
+from dotenv import load_dotenv
+load_dotenv()  # Load variables from .env file
+
+# Get API credentials from environment variables or use empty strings as fallback
+COURSERA_CLIENT_ID = os.environ.get("COURSERA_CLIENT_ID", "")
+COURSERA_CLIENT_SECRET = os.environ.get("COURSERA_CLIENT_SECRET", "")
 
 def fetch_courses_by_skills(skills, limit=5):
     """

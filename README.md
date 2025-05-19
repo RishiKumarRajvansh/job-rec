@@ -2,7 +2,49 @@
 
 A comprehensive job search and recommendation platform that helps users find job opportunities matching their skills and experience, provides personalized course recommendations to bridge skill gaps, and offers insightful job market analytics.
 
+## Table of Contents
+
+- [Recent Updates](#recent-updates)
+- [Core Features](#core-features)
+- [Technical Architecture](#technical-architecture)
+- [Implementation Details](#implementation-details)
+- [Setup and Installation](#setup-and-installation)
+- [Deployment Guide](#deployment-guide)
+  - [Development Environment](#development-environment)
+  - [Production Environment](#production-environment)
+  - [Switching Between Development and Production](#switching-between-development-and-production)
+- [Security Configuration](#security-configuration)
+- [Monitoring and Health Checks](#monitoring-and-health-checks)
+- [Production Readiness](#production-readiness)
+- [Rate Limiting](#rate-limiting)
+- [Maintenance](#maintenance)
+
 ## Recent Updates
+
+### Health Monitoring and Observability
+- Implemented comprehensive `/health` endpoint for production monitoring
+- Added detailed health checks for all system components (database, APIs, file system)
+- Created external health monitoring script with alerting capabilities
+- Added Slack and email alerting for system health issues
+- Included detailed component status reporting for easier troubleshooting
+- Implemented proper HTTP status codes based on system health (200, 503, 500)
+
+### Security and Production Readiness
+- Added Flask-Limiter for rate limiting on sensitive endpoints 
+- Secured API keys by moving them to environment variables
+- Made server host/port configurable via environment variables
+- Implemented comprehensive security headers (CSP, HSTS, XSS protection)
+- Enforced HTTPS in production environments
+- Added proper database connection pooling and timeouts
+
+### Project Organization Improvements
+- Removed unnecessary utility scripts used only during development
+- Consolidated duplicate dependencies
+- Optimized the codebase for production
+- Implemented complete error pages (404, 403, 429, 500)
+- Updated Gunicorn configuration with security best practices
+- Enhanced the wsgi.py file with production optimizations
+- Consolidated documentation into a single comprehensive README.md file
 
 ### Job Count Standardization
 - Implemented consistent job counting methodology across all pages
@@ -167,12 +209,544 @@ User data is maintained securely through:
 6. Run the application: `python app.py`
 7. Access the application at http://localhost:5000
 
-## Maintenance
+## Deployment Guide
 
-### Cleaning Up Old Graph Files
-To manually clean up old visualization files:
+### Development Environment
+
+#### Setup
+
+1. Create a virtual environment:
+   ```
+   python -m venv venv
+   ```
+
+2. Activate the virtual environment:
+   - Windows: `venv\Scripts\activate`
+   - Linux/Mac: `source venv/bin/activate`
+
+3. Install dependencies:
+   ```
+   pip install -r requirements.txt
+   ```
+
+4. Create a `.env` file from the template:
+   ```
+   copy .env.template .env
+   ```
+
+5. Run the application using the run.py script (recommended):
+   
+   ```
+   python run.py
+   ```
+   
+   This script will:
+   - Create the instance directory if needed with proper permissions
+   - Initialize the database if it doesn't exist or verify it if it does
+   - Run the Flask application
+
+The application will be available at: http://localhost:5000
+
+### Production Environment
+
+#### Production-Ready Setup
+
+1. Clone the repository on your production server:
+   ```bash
+   git clone [your-repository-url]
+   cd job_recommender_system
+   ```
+
+2. Create and activate a virtual environment:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # Linux/Mac
+   venv\Scripts\activate     # Windows
+   ```
+
+3. Install production dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Create or update `.env` file with production settings:
+   ```properties
+   # Production environment variables
+   FLASK_APP=app.py
+   FLASK_ENV=production
+   FLASK_DEBUG=False
+   
+   # Generate a secure random key
+   # Python: import secrets; print(secrets.token_hex(32))
+   SECRET_KEY=[your-secure-random-key]
+   
+   # Database configuration (PostgreSQL recommended)
+   DATABASE_URL=postgresql://username:password@localhost/job_recommender
+   
+   # Performance settings
+   SQLALCHEMY_ENGINE_OPTIONS_TIMEOUT=30
+   SQLALCHEMY_ENGINE_OPTIONS_POOL_SIZE=10
+   SQLALCHEMY_ENGINE_OPTIONS_MAX_OVERFLOW=20
+   ```
+
+5. Create necessary directories with proper permissions:
+   ```bash
+   mkdir -p instance logs
+   chmod 750 instance logs
+   ```
+
+6. Initialize the database:
+   ```bash
+   # SQLite: Will create the database automatically
+   python init_database.py
+   
+   # PostgreSQL: Run migrations
+   flask db upgrade
+   ```
+
+#### Running with Gunicorn (Recommended for Production)
+
+1. Install Gunicorn if not already included in requirements:
+   ```bash
+   pip install gunicorn
+   ```
+
+2. Run the application with Gunicorn (adjust workers based on your CPU cores):
+   ```bash
+   gunicorn --workers=4 --threads=2 --bind=0.0.0.0:8000 --log-level=info --access-logfile=logs/access.log --error-logfile=logs/error.log wsgi:app
+   ```
+
+   Parameters explained:
+   - `--workers=4`: Number of worker processes (2-4 × CPU cores)
+   - `--threads=2`: Threads per worker
+   - `--bind=0.0.0.0:8000`: Listen on all interfaces, port 8000
+   - `--log-level=info`: Logging level
+   - `--access-logfile`: Access log file
+   - `--error-logfile`: Error log file
+
+3. For testing, you can access the application at http://your-server-ip:8000
+
+#### Setting Up Nginx as a Reverse Proxy
+
+1. Install Nginx:
+   ```bash
+   # Debian/Ubuntu
+   sudo apt install nginx
+   
+   # CentOS/RHEL
+   sudo yum install nginx
+   ```
+
+2. Create a configuration file (e.g., `/etc/nginx/sites-available/job_recommender`):
+   ```nginx
+   server {
+       listen 80;
+       server_name your-domain.com www.your-domain.com;
+       
+       access_log /var/log/nginx/job_recommender-access.log;
+       error_log /var/log/nginx/job_recommender-error.log;
+       
+       location / {
+           proxy_pass http://127.0.0.1:8000;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+       }
+       
+       location /static {
+           alias /path/to/job_recommender_system/static;
+           expires 30d;
+       }
+   }
+   ```
+
+3. Enable the site and restart Nginx:
+   ```bash
+   sudo ln -s /etc/nginx/sites-available/job_recommender /etc/nginx/sites-enabled/
+   sudo nginx -t  # Test configuration
+   sudo systemctl restart nginx
+   ```
+
+#### Setting Up a Process Manager (systemd)
+
+1. Create a systemd service file `/etc/systemd/system/job_recommender.service`:
+   ```ini
+   [Unit]
+   Description=Job Recommender Gunicorn Daemon
+   After=network.target postgresql.service
+   
+   [Service]
+   User=www-data
+   Group=www-data
+   WorkingDirectory=/path/to/job_recommender_system
+   Environment="PATH=/path/to/job_recommender_system/venv/bin"
+   ExecStart=/path/to/job_recommender_system/venv/bin/gunicorn \
+             --workers 4 \
+             --threads 2 \
+             --bind 127.0.0.1:8000 \
+             --log-level info \
+             --access-logfile logs/access.log \
+             --error-logfile logs/error.log \
+             wsgi:app
+   
+   Restart=on-failure
+   RestartSec=5s
+   
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+2. Enable and start the service:
+   ```bash
+   sudo systemctl enable job_recommender
+   sudo systemctl start job_recommender
+   sudo systemctl status job_recommender  # Check service status
+   ```
+
+#### Configuring a Production Database (PostgreSQL)
+
+For production, PostgreSQL is strongly recommended over SQLite:
+
+1. Install PostgreSQL:
+   ```bash
+   # Debian/Ubuntu
+   sudo apt install postgresql postgresql-contrib
+   
+   # CentOS/RHEL
+   sudo yum install postgresql-server postgresql-contrib
+   sudo postgresql-setup initdb
+   sudo systemctl start postgresql
+   ```
+
+2. Create a database and user:
+   ```bash
+   sudo -u postgres psql
+   
+   postgres=# CREATE DATABASE job_recommender;
+   postgres=# CREATE USER job_recommender_user WITH ENCRYPTED PASSWORD 'secure_password';
+   postgres=# GRANT ALL PRIVILEGES ON DATABASE job_recommender TO job_recommender_user;
+   postgres=# \q
+   ```
+
+3. Update your `.env` file with PostgreSQL connection details:
+   ```
+   DATABASE_URL=postgresql://job_recommender_user:secure_password@localhost/job_recommender
+   ```
+
+4. Install the PostgreSQL adapter in your virtual environment:
+   ```bash
+   pip install psycopg2-binary
+   ```
+
+5. Run migrations:
+   ```bash
+   flask db upgrade
+   ```
+
+### Switching Between Development and Production
+
+To run in development mode locally:
 ```
-python cleanup_graphs.py
+export FLASK_ENV=development
+export FLASK_DEBUG=True
+python app.py
 ```
 
-The application automatically cleans files older than 3 days on startup.
+To run in production-like mode locally:
+```
+export FLASK_ENV=production
+export FLASK_DEBUG=False
+gunicorn --bind 0.0.0.0:8000 wsgi:app
+```
+
+## Security Configuration
+
+### Security Features
+
+The system includes the following security features:
+
+1. **Rate Limiting**
+   - Login and registration endpoints are protected from brute-force attacks
+   - Default rate limiting for all endpoints: 200 requests per day, 50 per hour
+   - Custom rate limits for sensitive routes
+
+2. **Security Headers**
+   - Content Security Policy (CSP) to prevent XSS attacks
+   - X-Content-Type-Options to prevent MIME type sniffing
+   - X-Frame-Options to prevent clickjacking
+   - X-XSS-Protection to enable browser's XSS protection
+   - Strict-Transport-Security (HSTS) for HTTPS enforcement
+   - Referrer-Policy for controlling HTTP referer information
+   - Permissions-Policy (formerly Feature-Policy) to control browser features
+
+3. **HTTPS Enforcement**
+   - Production environment enforces HTTPS connections
+   - HTTP requests are redirected to HTTPS
+
+4. **Credential Management**
+   - API keys and credentials stored in environment variables
+   - Database credentials configurable via environment variables
+   - Secret key for session management configurable via environment variables
+
+### Configuration Steps
+
+#### Set Up HTTPS
+
+For production deployment, HTTPS is essential. You can:
+
+1. Use Let's Encrypt for free SSL certificates:
+   ```bash
+   sudo apt-get install certbot python3-certbot-nginx
+   sudo certbot --nginx -d yourdomain.com
+   ```
+
+2. Update your Nginx configuration to include:
+   ```nginx
+   server {
+       listen 443 ssl;
+       server_name yourdomain.com;
+       
+       ssl_certificate /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
+       ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
+       
+       # Strong SSL settings
+       ssl_protocols TLSv1.2 TLSv1.3;
+       ssl_prefer_server_ciphers on;
+       ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+       
+       # HSTS (comment out if you face issues)
+       add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+   }
+   ```
+
+#### Secure File Permissions
+
+```bash
+# Set proper ownership
+sudo chown -R www-data:www-data /path/to/job_recommender_system
+
+# Set proper permissions
+find /path/to/job_recommender_system -type d -exec chmod 750 {} \;
+find /path/to/job_recommender_system -type f -exec chmod 640 {} \;
+
+# Make .env file accessible only to www-data
+chmod 600 /path/to/job_recommender_system/.env
+
+# Ensure instance folder is writable
+chmod 770 /path/to/job_recommender_system/instance
+```
+
+#### Regular Security Checks
+
+1. **Database Backup**:
+   ```bash
+   pg_dump -U postgres job_recommender > backup_$(date +%Y%m%d).sql
+   ```
+
+2. **Run Security Scan**:
+   ```bash
+   # Install safety
+   pip install safety
+   # Check for vulnerable dependencies
+   safety check -r requirements.txt
+   ```
+
+3. **Regular Security Updates**:
+   ```bash
+   sudo apt-get update
+   sudo apt-get upgrade
+   ```
+
+## Monitoring and Health Checks
+
+### Health Check Endpoint
+
+The system provides a comprehensive `/health` endpoint that returns detailed information about the health of all components.
+
+#### Accessing the Health Check
+
+```
+GET /health
+```
+
+#### Response Format
+
+```json
+{
+  "status": "healthy",  // or "degraded" or "unhealthy"
+  "timestamp": "2025-05-18T00:45:12.345Z",
+  "environment": "production",
+  "database": {
+    "status": "healthy",
+    "message": "Database connection successful (query time: 0.002s)"
+  },
+  "api": {
+    "coursera": {
+      "status": "healthy",
+      "response_time": "0.543s",
+      "status_code": 200
+    }
+  },
+  "file_system": {
+    "status": "healthy",
+    "details": {
+      "instance": {
+        "exists": true,
+        "writable": true,
+        "readable": true
+      },
+      "uploads": {
+        "exists": true,
+        "writable": true,
+        "readable": true
+      }
+    }
+  },
+  "environment_vars": {
+    "status": "healthy",
+    "missing_vars": []
+  }
+}
+```
+
+#### Status Codes
+
+- **200 OK**: All components are healthy
+- **503 Service Unavailable**: Some components are degraded but system is operational
+- **500 Internal Server Error**: Critical components (like database) are down
+
+### Automated Monitoring
+
+The system can be monitored using regular health checking scripts:
+
+#### Setting up a Cron Job
+
+```bash
+# Run every 15 minutes
+*/15 * * * * /path/to/venv/bin/python /path/to/monitor_health.py --url=https://yourdomain.com/health
+```
+
+### Log Monitoring
+
+Set up log monitoring to track important events and errors:
+
+1. Configure centralized logging:
+   ```bash
+   # Example using rsyslog
+   sudo vim /etc/rsyslog.d/30-job-recommender.conf
+   
+   # Add these lines
+   if $programname == 'job_recommender' then /var/log/job_recommender.log
+   & stop
+   ```
+
+2. Set up log rotation:
+   ```bash
+   sudo vim /etc/logrotate.d/job_recommender
+   
+   # Add these lines
+   /var/log/job_recommender.log {
+       daily
+       rotate 14
+       compress
+       delaycompress
+       missingok
+       notifempty
+       create 0640 www-data adm
+   }
+   ```
+
+## Production Readiness
+
+The Job Recommender System is fully production-ready with the following features:
+
+### Health Monitoring & Observability
+
+✅ **Comprehensive Health Check System**
+- Detailed `/health` endpoint with HTTP status codes (200/503/500) based on system state
+- Component-level health checks for database, API services, file system, and environment variables
+- Health_check.py module with thorough system component validation
+
+### Security Features
+
+✅ **Web Security**
+- Content Security Policy (CSP) headers
+- HSTS for secure connections
+- XSS protections
+- Clickjacking protection
+- Security.py module with comprehensive security functions
+- HTTPS enforcement for production environments
+
+✅ **Rate Limiting**
+- Flask-Limiter configuration with on_breach parameter
+- Rate limiting for sensitive endpoints (login, registration)
+- Proper error handling for rate limit breaches
+
+✅ **Authentication & Authorization**
+- Secure password hashing with bcrypt
+- Proper session management
+- Restricting sensitive routes with @login_required decorator
+- User credential validation
+
+### Error Handling
+
+✅ **Comprehensive Error Pages**
+- Custom error templates for 404, 403, 429, and 500 errors
+- Detailed error logging with traceback
+- User-friendly error messages
+- Proper HTTP status codes for all error responses
+
+### Database Optimizations
+
+✅ **Connection Pooling**
+- SQLAlchemy connection pool configuration
+- Timeouts for database operations
+- Proper pool_size and max_overflow parameters
+- Database connection validation on startup
+
+## Rate Limiting
+
+### Implementation
+
+Rate limiting is implemented using Flask-Limiter 3.5.0:
+
+```python
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://",  # Uses in-memory storage for development
+    strategy="fixed-window",  # Uses a fixed window strategy for counting requests
+    on_breach=limiter_handler  # Custom handler for rate limit breaches
+)
+```
+
+### Route-Specific Rate Limits
+
+Sensitive routes have stricter rate limits:
+
+- Login: 10 requests per minute
+- Registration: 10 requests per hour
+
+Example:
+
+```python
+@app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("10 per minute")
+def login():
+    # Login logic here
+```
+
+### Production Considerations
+
+For production deployment:
+
+1. Consider using a distributed storage backend like Redis for rate limiting:
+   ```python
+   limiter = Limiter(
+       get_remote_address, 
+       app=app,
+       storage_uri="redis://localhost:6379"
+   )
+   ```
